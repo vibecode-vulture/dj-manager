@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DJ Manager</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">◉</span> DJ MANAGER</div>
+  <div class="indicators">
+    <div class="ind" id="ind-traktor" title="Traktor must be closed while DJ Manager writes the collection"><span class="led"></span>TRAKTOR</div>
+    <div class="ind" id="ind-spotdl"><span class="led"></span>SPOTDL</div>
+    <div class="ind" id="ind-job"><span class="led"></span><span id="job-title">IDLE</span></div>
+  </div>
+  <div class="actions">
+    <button class="btn accent" id="btn-add">+ ADD PLAYLIST</button>
+    <button class="btn" id="btn-update-all" title="Fetch all playlists from Spotify and download new songs">⟳ UPDATE ALL</button>
+    <button class="btn" id="btn-write" title="Write playlists to the Traktor collection now">⇪ TRAKTOR</button>
+  </div>
+</header>
+
+<div class="main">
+  <aside class="browser">
+    <div class="section-label">BROWSER</div>
+    <nav class="fixed-nodes">
+      <a class="node" data-view="collection"><span class="ico">▤</span>Track Collection <span class="cnt" id="cnt-collection"></span></a>
+      <a class="node" data-view="removed"><span class="ico">⌫</span>Removed <span class="cnt" id="cnt-removed"></span></a>
+      <a class="node" data-view="duplicates"><span class="ico">⧉</span>Duplicates <span class="cnt" id="cnt-duplicates"></span></a>
+    </nav>
+    <div class="section-label">GENRES</div>
+    <div id="tree" class="tree"></div>
+    <div class="section-label">SYSTEM</div>
+    <nav class="fixed-nodes">
+      <a class="node" data-view="settings"><span class="ico">⚙</span>Settings</a>
+      <a class="node" data-view="deps"><span class="ico">⬢</span>Dependencies</a>
+      <a class="node" data-view="backups"><span class="ico">⛁</span>Backups</a>
+    </nav>
+  </aside>
+
+  <section class="content">
+    <div id="deck" class="deck"></div>
+    <div id="view" class="view"></div>
+  </section>
+</div>
+
+<footer class="console" id="console">
+  <div class="console-head">
+    <span class="section-label">LOG</span>
+    <span id="console-status"></span>
+    <button class="btn tiny" id="btn-console">▾</button>
+  </div>
+  <pre id="log"></pre>
+</footer>
+
+<div id="modal-root"></div>
+<div id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
