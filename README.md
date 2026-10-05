@@ -4,6 +4,8 @@ Single source of truth for a genre-based music collection. Spotify playlists (vi
 [spotdl](https://github.com/spotDL/spotify-downloader)) are the discovery tool, folders on
 disk store every song once, and Traktor gets generated playlists for every genre layer.
 
+![A genre playlist linked to Spotify, with LOCAL and DELETED tracks](docs/screenshots/genre-playlist.png)
+
 The spec is in `requirements.txt`.
 
 ## Install
@@ -65,6 +67,38 @@ artist + title (± 3 s duration).
 **Removing a playlist** deletes its Traktor playlist and folder. Files still used by other
 playlists move into one of their folders, and the rest move to `<music>/_removed/<key>/`.
 Moves are applied to the Traktor collection entries, so cue points and beat grids survive.
+
+## Screenshots
+
+**Genre with sub genres.** A genre's playlist contains every track of its sub genres. The
+*Playlists* column shows which playlist(s) a track belongs to; each file is still stored
+only once on disk.
+
+![The techno genre aggregating acid, hard techno and peak time](docs/screenshots/genre-aggregate.png)
+
+**Add a playlist.** The name defines the genre path. The preview shows the folder that
+will be created and the Traktor playlists it ends up in.
+
+![Add playlist dialog with folder and Traktor preview](docs/screenshots/add-playlist.png)
+
+**Blacklist.** Songs you removed by hand stay out, even though they are still in the
+Spotify playlist. Unblock them to get them back on the next update.
+
+![Blacklist of a playlist](docs/screenshots/blacklist.png)
+
+**Duplicates.** Copies of the same song found during the import. DJ Manager uses one file;
+the others are listed so you can delete them.
+
+![Duplicate files found during import](docs/screenshots/duplicates.png)
+
+**Settings** for the music folder, Traktor, Spotify login, download format and updates.
+
+![Settings](docs/screenshots/settings.png)
+
+**Dependencies.** Update spotdl and yt-dlp from the app; every change is snapshotted and
+can be restored.
+
+![Managed dependencies with a known-good snapshot](docs/screenshots/dependencies.png)
 
 ## Data locations
 
