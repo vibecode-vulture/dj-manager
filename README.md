@@ -6,7 +6,24 @@ disk store every song once, and Traktor gets generated playlists for every genre
 
 The spec is in `requirements.txt`.
 
-## Run
+## Install
+
+Download the file for your system from the latest GitHub release:
+
+| File | System | Notes |
+|---|---|---|
+| `DJManager-<version>-setup.exe` | Windows 10/11 (x64) | **Recommended.** Installs per user (no admin rights), adds Start menu entries, updates itself |
+| `DJManager-<version>-portable.exe` | Windows 10/11 (x64) | Single file, no installation. Keeps its data in `DJManager-data\` next to the exe |
+| `dj-manager-<version>-linux-x86_64` | Linux x86_64 (glibc 2.35+, e.g. Ubuntu 22.04+) | Single file. `chmod +x` it and run; the UI opens in your browser |
+
+Nothing else needs to be installed. The first time you install spotdl from the
+Dependencies page, the packaged app downloads its own Python runtime (about 30 MB) and
+creates spotdl's environment from it.
+
+The Windows app shows its UI in a native window. That needs the Microsoft Edge WebView2
+runtime, which Windows 10/11 normally include. Without it, the app falls back to the browser.
+
+### Run from source
 
 Requires Python 3.10+ (Windows or Linux).
 
@@ -57,7 +74,9 @@ Moves are applied to the Traktor collection entries, so cue points and beat grid
 | Settings | `~/.config/dj-manager/settings.json` | `%APPDATA%\DJManager` |
 | spotdl environment, snapshots, Traktor backups | `~/.local/share/dj-manager/` | `%LOCALAPPDATA%\DJManager` |
 
-Set `DJMANAGER_HOME` to keep settings and data in a single portable folder.
+The portable Windows exe keeps settings and data in `DJManager-data\` next to the exe.
+Set `DJMANAGER_HOME` to keep settings and data in a single folder of your choice.
+Windowed builds write their log to `<data>/logs/dj-manager.log`.
 
 ## Dependency updates
 
@@ -65,6 +84,52 @@ spotdl and yt-dlp run in their own virtual environment and can be updated from t
 (latest or any version from PyPI). Before every change the full `pip freeze` is
 snapshotted, and any snapshot can be restored. After a successful playlist update, the
 current snapshot is marked as known good.
+
+## App updates
+
+DJ Manager checks the latest GitHub release when it starts (Settings → Updates can turn
+that off or check manually). When a newer version exists, an **UPDATE TO x.y.z** button
+appears in the top bar. Every download is checked against the release's `SHA256SUMS.txt`
+before anything is replaced.
+
+| Installation | How the update is applied |
+|---|---|
+| Installer | Downloads the new `setup.exe` and runs it silently over the existing installation, then DJ Manager starts again |
+| Portable exe | Renames the running exe to `.old.exe`, puts the new one in its place and restarts (the old file is removed on the next start) |
+| Linux binary | Replaces the binary in place and restarts |
+| Source checkout | Shows the new version; update with `git pull` |
+
+Your library, settings, backups and spotdl environment are not touched by updates.
+The release source is the GitHub repository the build came from. To use a different one,
+set Settings → Updates → *Release source* (`owner/repo`).
+
+## Building and releasing
+
+Build for the platform you are on (PyInstaller cannot cross-compile):
+
+```bash
+pip install -e ".[build]"            # Windows: add ,window → ".[window,build]"
+python packaging/build.py --repo owner/repo
+```
+
+| Platform | Output in `dist/` | Requirements |
+|---|---|---|
+| Linux | `dj-manager-<v>-linux-x86_64` | build on the oldest distro you want to support (glibc) |
+| Windows | `DJManager-<v>-portable.exe`, `DJManager-<v>-setup.exe` | [Inno Setup 6](https://jrsoftware.org/isinfo.php) for the installer; `--skip-installer` builds only the portable exe |
+
+`--repo` sets which GitHub repository the updater checks. The installer script is
+`packaging/windows/installer.iss`. Never change its `AppId`: it is what lets new versions
+install over old ones.
+
+**Release:** bump `__version__` in `djmanager/__init__.py`, commit, then
+
+```bash
+git tag v0.2.0 && git push origin main v0.2.0
+```
+
+`.github/workflows/release.yml` runs the tests, checks that the tag matches the version,
+builds all three files on GitHub's Windows and Ubuntu 22.04 runners, and publishes them
+with `SHA256SUMS.txt` as a release. Installed copies pick the release up on their next start.
 
 ## Development
 
@@ -75,4 +140,5 @@ current snapshot is marked as known good.
 
 Layout: `djmanager/` contains `genres` (naming), `library` (model and persistence), `scanner`
 (initial import), `audio` (tags), `spotdl_client`, `deps` (managed environment), `traktor`
-(NML), `backup`, `service` (operations as background jobs), `api` (FastAPI) and `static/` (UI).
+(NML), `backup`, `updater` (self-update), `service` (operations as background jobs), `api` (FastAPI)
+and `static/` (UI). `packaging/` holds the build script, PyInstaller launcher, icon and installer.
