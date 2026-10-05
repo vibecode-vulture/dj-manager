@@ -264,7 +264,8 @@ async function renderGenre(deck, view) {
 async function renderList(deck, view, url, title, help) {
   S.rows = await api("GET", url);
   deck.innerHTML = deckHtml({ letter: title[0], orange: title !== "Track Collection", title: esc(title), sub: esc(help), meters: [[S.rows.length, "TRACKS"]] });
-  renderTable(view, { showPlaylist: true, showDuplicates: S.view.type === "duplicates", showPath: S.view.type !== "collection" });
+  const dupes = S.view.type === "duplicates";
+  renderTable(view, { showPlaylist: !dupes, showDuplicates: dupes, showPath: S.view.type !== "collection" });
 }
 
 const COLUMNS = {
