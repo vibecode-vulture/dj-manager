@@ -1,0 +1,84 @@
+# DJ manager
+Makes a collection out of your playlist.
+Currently, i have a lot of spotify playlists that i manually downloaded via spotdl.
+they folders are structured by the playlist names.
+i can not check if a song sits in different playlists and is downloded mutliple times
+also i can not easily split paylists, merge them, etc.
+my paylists are genres, but often they get so long that i would need to split them in different playlists and sub genres.
+DJ manager should be my single source of truth about my collection, spotify playlists are the helper i use to discover and add music from spotify.
+i use traktor to play the music, but currently i only manage my tracks based on the folder system, i dont use any other collection curation from traktor.
+
+## look
+inspired by traktor kontrol ui
+
+## settings
+- main music folder on the computer
+- login to spotify to use authentication for e.g. spotdl
+
+## manage music
+The main parameter by what music is sorted is hirarchic genres.
+a genre can have a sub genre, which can have a sub genre, etc.
+to access the collection in traktor kontrol, the dj manager automatically create playlists for every hirachic layer of genres.
+naming of a layer of a genre works like this: genre-name_sub-genre-name-1_sub-genre-name-2, where - is used for spaces and _ shows the layers.
+this way a song is only stored once on the disk.
+
+
+
+## Manage Playlists
+
+### add playlists
+i can add new playlists from spotify by link and set the name of the paylist which defines its genre and sub genres.
+a new folder with the name of the playlist is created in the main music folder, location depends on the genre and subgenres.
+genres are main folders in the main music folder and every subgenre is a new folder. subsubgenres are folders inside the subgenre, which is a folder inside the genre, etc.
+contained tracks are fetched and it is checked which tracks already exists in the collection or which one needs to be downloaded.
+all new tracks are downloaded to the newly created folder.
+then a new playlist is created in the traktor kontrol library and every track of the playlist is added to it.
+additionally, all tracks are added to the playlists of every genre and subgenres.
+
+### edit playlists
+the spotify link of playlists can be edited. this does not delete any songs that were included in the playlist before and are not included in the new playlist anymore.
+also songs can be removed from a playlists, which removes them from the genre. if a song exists in no genre anymore after a deletion, this song is marked as deleted in the genre were it still exists and is not included in the traktor kontrol playlist of that genre anymore, but songs are never from disk by the program.
+usually, the content of a playlist should be managed by the spotify account. if a song is manually deleted from a playlist, it is saved in a blacklist of that playlist.
+next time the playlist is feteched from spotify, this song will not be downloaded and added to the collection again. the blacklist of playlists can also be managed, so a song can be deleted from the blacklist.
+
+
+### update playlists
+on start and manually, all playlists are fetched from spotify, new songs are downloaded and stored in the collection.
+if a song was removed from a playlist, it is also removed from the genre playlists of traktor kontrol.
+if the song is not included in any genre after that, the song is marked as deleted in the last genre, as desribed above.
+
+### remove playlists
+if a playlist is removed, the genre playlist is removed.
+if the songs dont exist in other genere playlists, they are marked as removed in a separate place of the app, where all songs that are not included in any genre but were managed once are listed. if the user manually deletes the songs from disc, they will also beremoved from that list.
+since the folder of the playlist should also be deleted, songs that exist in other playlists needs to be moved on disk to another playlist folder.
+
+## Technical
+
+### integration
+We dont want to maintain a spotify and youtube communication API.
+spotdl combines fetching playlist information from spotify and downloading music
+from youtube/youtube music, so this can be a great tool to integtrate.
+
+### taktor kontrol
+before starting to use the program, it backups the traktor kontrol libary files.
+the program is meaned to be used while traktor kontrol is closed.
+everytime playlists are updated, a backup of the library is created in case anything goes wrong.
+the backup can be resotred via the program.
+to manage playlists in taktor kontrol, the library files are edited.
+all information about the music library is also stored separately on the disk.
+
+
+### inital usage
+initially existing playlists in traktor kontrol are ignored by the program.
+only playlists created by the program are ever edited.
+since folders and subfolders inside the main music folder define genres, subgenres etc, on initial launch and selecting the main music folder, the genres, subgenres etc are read.
+the corresponding playist in traktor kontrol are created and the songs are added to the usual music library.
+in the program, playlists are created as if the were added manually by a spotify link, except that the link is missing.
+the user can add a link for every playlist that has no link yet, so the existing library of the user can directly be used with the program.
+if the user added a playlist link for one that had no link before and songs in that folder/playlist are not included in the spotify playlist, they get included in the traktor playlist and genre anyway, but are marked as "local" while not included in the spotify playlist.
+
+
+### plattform
+the programm should work on windows and linux.
+important dependencies like spotdl, youtubedlp or anything else that is subjected to many changes, and were it is expected that the integration does not work anymore when no dependencies update is updated should be updateable via the programm itself dynamically.
+if the update broke the programm because of breaking changes, it should be possible to restore the old working version of the dependency.

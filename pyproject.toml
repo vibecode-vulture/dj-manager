@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dj-manager"
+version = "0.1.0"
+description = "Genre-based music collection manager that syncs Spotify playlists (via spotdl) into Traktor"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "mutagen>=1.47",
+    "packaging>=23",
+]
+
+[project.optional-dependencies]
+window = ["pywebview>=5"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+dj-manager = "djmanager.__main__:main"
+
+[tool.setuptools]
+packages = ["djmanager"]
+
+[tool.setuptools.package-data]
+djmanager = ["static/*"]
