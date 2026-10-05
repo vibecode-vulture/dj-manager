@@ -91,7 +91,7 @@ class Updater:
         info = UpdateInfo(current=__version__, mode=mode, repo=self.repo)
         self._sums_url = ""
         if not info.repo:
-            info.message = "No update source configured (Settings > Updates > GitHub repository)"
+            info.message = "No update source configured (Settings > Updates > Release source)"
             self.last = info
             return info
         release = _get_json(f"https://api.github.com/repos/{info.repo}/releases/latest")
