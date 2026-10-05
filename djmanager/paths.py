@@ -10,10 +10,31 @@ APP_NAME = "DJManager"
 IS_WINDOWS = sys.platform.startswith("win")
 
 
+INSTALLED_MARKER = "installed.marker"  # written next to the exe by the Windows installer
+PORTABLE_DATA = "DJManager-data"
+
+
+def executable() -> Path:
+    return Path(sys.executable).resolve()
+
+
+def install_mode() -> str:
+    """'source', 'installed' (Windows installer), 'portable' (Windows exe) or 'binary' (Linux)."""
+    if not getattr(sys, "frozen", False):
+        return "source"
+    if IS_WINDOWS:
+        return "installed" if (executable().parent / INSTALLED_MARKER).exists() else "portable"
+    return "binary"
+
+
 def _override() -> Path | None:
-    # Allows tests and portable installs to keep everything in one place.
+    # Tests and portable setups keep everything in one place.
     value = os.environ.get("DJMANAGER_HOME")
-    return Path(value) if value else None
+    if value:
+        return Path(value)
+    if install_mode() == "portable":
+        return executable().parent / PORTABLE_DATA
+    return None
 
 
 def config_dir() -> Path:
