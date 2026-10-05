@@ -36,6 +36,9 @@ class Settings:
     cookie_file: str = ""  # optional YouTube Music cookies (premium quality)
 
     update_on_start: bool = True
+    # GitHub "owner/repo" with DJ Manager releases; empty = the repo the build came from
+    update_repo: str = ""
+    check_app_updates: bool = True
     backups_to_keep: int = 30
 
     def public(self) -> dict:

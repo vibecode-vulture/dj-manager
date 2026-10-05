@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path, PurePosixPath
 
 from . import genres
@@ -12,6 +13,7 @@ from .library import REMOVED_FOLDER, SOURCE_LOCAL, SOURCE_SPOTIFY, Library, Play
 from .scanner import scan
 from .settings import SettingsStore
 from .spotdl_client import RemoteSong, SpotdlClient
+from .updater import Updater
 from .traktor import Collection, PlaylistNode, TrackMeta, TraktorError, find_collections, mapper_for, traktor_running
 from .util import is_spotify_playlist_url, move_file, now_iso, safe_filename
 
@@ -28,6 +30,7 @@ class Service:
         self.backups = backups or BackupManager()
         self.spotdl = spotdl or SpotdlClient(self.deps, self.settings_store.settings)
         self.jobs = JobRunner()
+        self.updater = Updater(self.settings_store.settings)
         self.library: Library | None = None
         self.open_library()
 
@@ -430,7 +433,20 @@ class Service:
             return f"Logged in as {name}"
         return self.jobs.submit("Spotify login", run)
 
+    def submit_app_update(self) -> Job:
+        return self.jobs.submit("Update DJ Manager", lambda job: self.updater.apply(job.write))
+
+    def check_app_update_background(self) -> None:
+        def run() -> None:
+            try:
+                self.updater.check()
+            except Exception:  # offline, rate limited, ... - just try again next start
+                pass
+        threading.Thread(target=run, daemon=True).start()
+
     def startup(self) -> None:
+        if self.settings.check_app_updates:
+            self.check_app_update_background()
         if self.library and self.settings.update_on_start and self.deps.is_installed() \
                 and any(pl.spotify_url for pl in self.library.playlists.values()):
             self.submit_update_all()

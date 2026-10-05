@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 import threading
 import time
@@ -10,8 +11,30 @@ import webbrowser
 
 import uvicorn
 
+from . import __version__
 from .api import create_app
 from .service import Service
+from .updater import cleanup_after_update
+
+
+def _wait_for_exit(pid: int, timeout: float = 20.0) -> None:
+    """After a self-update: wait until the previous process released port and files."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            if os.name == "nt":
+                import ctypes
+
+                handle = ctypes.windll.kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+                if not handle:
+                    return
+                ctypes.windll.kernel32.WaitForSingleObject(handle, int((end - time.time()) * 1000))
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return
+            os.kill(pid, 0)
+        except OSError:
+            return
+        time.sleep(0.2)
 
 
 def _free_port(preferred: int) -> int:
@@ -29,7 +52,12 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--browser", action="store_true", help="open in the web browser instead of a window")
     parser.add_argument("--no-open", action="store_true", help="only run the server")
+    parser.add_argument("--version", action="version", version=f"DJ Manager {__version__}")
+    parser.add_argument("--wait-pid", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.wait_pid:
+        _wait_for_exit(args.wait_pid)
+    cleanup_after_update()
 
     service = Service()
     app = create_app(service)

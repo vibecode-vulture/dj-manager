@@ -17,6 +17,7 @@ from .jobs import Job
 from .library import SOURCE_LOCAL, Library, Track
 from .service import Service, ServiceError
 from .traktor import TraktorError, find_collections, traktor_running
+from .updater import UpdateError
 
 STATIC = Path(__file__).parent / "static"
 
@@ -50,6 +51,7 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.exception_handler(GenreError)
     @app.exception_handler(TraktorError)
     @app.exception_handler(DependencyError)
+    @app.exception_handler(UpdateError)
     async def handle_error(_: Request, exc: Exception):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
@@ -67,6 +69,8 @@ def create_app(service: Service | None = None) -> FastAPI:
         library = svc.library
         return {
             "version": __version__,
+            "install_mode": paths.install_mode(),
+            "update": svc.updater.last.to_dict() if svc.updater.last else None,
             "settings": svc.settings.public(),
             "library_loaded": library is not None,
             "nml_path": str(nml) if nml else None,
@@ -266,6 +270,18 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.post("/api/spotify/login")
     def spotify_login():
         return job_ref(svc.submit_login())
+
+    # ------------------------------------------------------------------ app updates
+    @app.get("/api/update/check")
+    def update_check():
+        try:
+            return svc.updater.check().to_dict()
+        except OSError as exc:
+            raise HTTPException(502, f"Update server not reachable: {exc}") from exc
+
+    @app.post("/api/update/apply")
+    def update_apply():
+        return job_ref(svc.submit_app_update())
 
     # ------------------------------------------------------------------ jobs
     @app.get("/api/jobs")

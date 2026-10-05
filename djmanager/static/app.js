@@ -122,6 +122,9 @@ async function refreshState() {
   d.lastChild.textContent = a.deps_installed ? "SPOTDL" : "SPOTDL MISSING";
   if (a.current_job) follow(a.current_job);
   else if (!Object.keys(S.jobs).length) updateJobIndicator(null);
+  const up = $("#btn-app-update");
+  up.hidden = !(a.update && a.update.available && a.update.asset_url);
+  if (!up.hidden) up.textContent = `UPDATE TO ${a.update.latest}`;
   const st = a.stats || {};
   $("#cnt-collection").textContent = st.tracks ?? "";
   $("#cnt-removed").textContent = st.removed || "";
@@ -498,16 +501,36 @@ function renderSettings(view) {
     ${field("Parallel downloads", text("download_threads", "", "number"))}
     ${field("YouTube cookie file", text("cookie_file", "optional, cookies.txt for YouTube Music Premium quality"))}
 
+    <h2>UPDATES</h2>
+    ${field("Version", `<span class="mono">${esc(S.app.version)}</span> · <span class="help">${esc({source: "running from source", installed: "installed (Windows installer)", portable: "portable exe", binary: "Linux binary"}[S.app.install_mode] || S.app.install_mode)}</span>`)}
+    ${field("Release source", text("update_repo", "owner/repo on GitHub (empty = repository the build came from)"))}
+    ${field("On start", check("check_app_updates", "Check for new DJ Manager versions when it starts"))}
+    ${field("", `<div class="row"><button class="btn" id="check-update">CHECK FOR UPDATES</button><span class="help" id="update-result"></span></div>`)}
+
     <h2>GENERAL</h2>
     ${field("On start", check("update_on_start", "Update all playlists when DJ Manager starts"))}
     ${field("Backups to keep", text("backups_to_keep", "", "number"), "The initial backup is always kept.")}
     <p><button class="btn accent" id="save-settings">SAVE SETTINGS</button></p>
   </div>`;
+  $("#check-update").addEventListener("click", async () => {
+    $("#update-result").textContent = "checking…";
+    const info = await act(() => api("GET", "/api/update/check"));
+    $("#update-result").innerHTML = !info ? "" : info.available && info.asset_url
+      ? `${esc(info.latest)} available <button class="btn orange" onclick="applyUpdate()">INSTALL ${esc(info.latest)}</button>`
+      : esc(info.message || (info.available ? `${info.latest} available` : "up to date"));
+    refreshState();
+  });
   $("#save-settings").addEventListener("click", async () => {
     const values = {};
     $$("[data-k]", view).forEach((el) => { values[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value; });
     if (await act(() => api("POST", "/api/settings", values))) { toast("Settings saved"); refresh(); }
   });
+}
+
+function applyUpdate() {
+  const u = S.app?.update || {};
+  confirmBox("UPDATE DJ MANAGER", `Download and install DJ Manager <b>${esc(u.latest || "")}</b>? The app closes and starts again with the new version. Your library, settings and spotdl environment are kept.`,
+    "Update now", () => runJob(api("POST", "/api/update/apply")));
 }
 
 function pickNml() {
@@ -588,6 +611,7 @@ async function renderBackups(view) {
 $("#btn-add").addEventListener("click", () => addPlaylist(S.view.type === "genre" ? S.view.key : ""));
 $("#btn-update-all").addEventListener("click", () => runJob(api("POST", "/api/update-all")));
 $("#btn-write").addEventListener("click", () => runJob(api("POST", "/api/traktor/write")));
+$("#btn-app-update").addEventListener("click", applyUpdate);
 $("#btn-console").addEventListener("click", () => {
   const c = $("#console");
   c.classList.toggle("collapsed");
