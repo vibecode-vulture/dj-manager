@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -24,6 +25,12 @@ from .util import atomic_write_text, now_iso
 
 MANAGED_PACKAGES = ["spotdl", "yt-dlp"]
 GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
+# Standalone CPython for packaged builds (which have no interpreter to create a venv with).
+PYTHON_RUNTIME_VERSION = "3.12.15+20261003"
+PYTHON_RUNTIME_URL = (
+    "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/"
+    f"cpython-{PYTHON_RUNTIME_VERSION}-{{target}}-install_only.tar.gz"
+)
 
 
 @dataclass
@@ -43,6 +50,25 @@ class DepsState:
 
 class DependencyError(RuntimeError):
     pass
+
+
+def child_env(**extra: str) -> dict[str, str]:
+    """Environment for child processes.
+
+    PyInstaller points LD_LIBRARY_PATH (Linux) at its bundled libraries; a child Python
+    must not inherit that, so the original value is restored.
+    """
+    env = {**os.environ, "PYTHONUTF8": "1", **extra}
+    if getattr(sys, "frozen", False):
+        for var in ("LD_LIBRARY_PATH", "LD_PRELOAD"):
+            orig = env.pop(var + "_ORIG", None)
+            if orig is not None:
+                env[var] = orig
+            else:
+                env.pop(var, None)
+        env.pop("PYTHONHOME", None)
+        env.pop("PYTHONPATH", None)
+    return env
 
 
 def _no_window() -> dict:
@@ -84,7 +110,7 @@ class DependencyManager:
     def _run(self, args: list[str], log=None, timeout: int = 1800) -> str:
         proc = subprocess.Popen(
             args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            encoding="utf-8", errors="replace", env={**os.environ, "PYTHONUTF8": "1"}, **_no_window(),
+            encoding="utf-8", errors="replace", env=child_env(), **_no_window(),
         )
         lines = []
         assert proc.stdout is not None
@@ -101,7 +127,7 @@ class DependencyManager:
     def ensure_venv(self, log=print) -> None:
         if self.is_installed():
             return
-        base_python = self._base_python()
+        base_python = self._base_python(log)
         log(f"Creating dependency environment in {self.venv}")
         try:
             self._run([base_python, "-m", "venv", str(self.venv)], log)
@@ -115,14 +141,32 @@ class DependencyManager:
             self._run([str(self.python), str(get_pip), "-q"], log)
         self._run([str(self.python), "-m", "pip", "install", "-q", "--upgrade", "pip"], log)
 
-    @staticmethod
-    def _base_python() -> str:
-        if getattr(sys, "frozen", False):
-            found = shutil.which("python3") or shutil.which("python") or shutil.which("py")
-            if not found:
-                raise DependencyError("A Python 3 installation is required to manage spotdl")
-            return found
-        return sys.executable
+    def _base_python(self, log=print) -> str:
+        """Interpreter used to create the venv.
+
+        From source this is the running Python. Packaged builds have none, so a pinned
+        standalone CPython (python-build-standalone) is downloaded once into the data dir.
+        """
+        if not getattr(sys, "frozen", False):
+            return sys.executable
+        runtime = self.base / "python"
+        exe = runtime / ("python.exe" if paths.IS_WINDOWS else "bin/python3")
+        if exe.exists():
+            return str(exe)
+        url = PYTHON_RUNTIME_URL.format(target="x86_64-pc-windows-msvc" if paths.IS_WINDOWS else "x86_64-unknown-linux-gnu")
+        archive = self.base / "python-runtime.tar.gz"
+        log(f"Downloading Python runtime {PYTHON_RUNTIME_VERSION} ...")
+        urllib.request.urlretrieve(url, archive)
+        shutil.rmtree(runtime, ignore_errors=True)
+        with tarfile.open(archive) as tar:  # contains a top-level "python/" folder
+            try:
+                tar.extractall(self.base, filter="data")
+            except TypeError:  # Python without tarfile extraction filters
+                tar.extractall(self.base)
+        archive.unlink(missing_ok=True)
+        if not exe.exists():
+            raise DependencyError(f"Python runtime download is incomplete ({exe} missing)")
+        return str(exe)
 
     def pip(self, *args: str, log=print) -> str:
         self.ensure_venv(log)
@@ -142,7 +186,8 @@ class DependencyManager:
             "print(json.dumps(out))"
         )
         try:
-            out = subprocess.run([str(self.python), "-c", script], capture_output=True, text=True, timeout=60, **_no_window())
+            out = subprocess.run([str(self.python), "-c", script], capture_output=True, text=True, timeout=60,
+                                 env=child_env(), **_no_window())
             result.update(json.loads(out.stdout.strip().splitlines()[-1]))
         except Exception:
             pass
@@ -179,7 +224,7 @@ class DependencyManager:
             script = "from spotdl.utils.ffmpeg import get_ffmpeg_path as g; p = g(); print(p or '')"
             try:
                 out = subprocess.run([str(self.python), "-c", script], capture_output=True, text=True,
-                                     timeout=30, **_no_window())
+                                     timeout=30, env=child_env(), **_no_window())
                 found = out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ""
                 if found:
                     return found

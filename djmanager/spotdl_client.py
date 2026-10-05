@@ -8,7 +8,6 @@ the mapping file -> track unambiguous before files are moved into the collection
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import uuid
@@ -16,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import paths
-from .deps import DependencyManager, _no_window
+from .deps import DependencyManager, _no_window, child_env
 from .settings import Settings
 from .util import AUDIO_EXTENSIONS
 
@@ -74,7 +73,7 @@ class SpotdlClient:
         proc = subprocess.Popen(
             cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
-            env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "TERM": "dumb", "COLUMNS": "400"}, **_no_window(),
+            env=child_env(PYTHONIOENCODING="utf-8", TERM="dumb", COLUMNS="400"), **_no_window(),
         )
         lines = []
         assert proc.stdout is not None
@@ -163,7 +162,7 @@ class SpotdlClient:
         )
         out = subprocess.run(
             [str(self.deps.python), "-c", script], capture_output=True, text=True, timeout=600,
-            stdin=subprocess.DEVNULL, **_no_window(),
+            stdin=subprocess.DEVNULL, env=child_env(), **_no_window(),
         )
         for line in (out.stdout + out.stderr).splitlines():
             if line.strip():
