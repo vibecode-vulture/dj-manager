@@ -349,7 +349,11 @@ function modal(title, body, buttons) {
   }));
   $(".modal-bg", root).addEventListener("mousedown", (ev) => { if (ev.target.classList.contains("modal-bg")) close(); });
   const first = $("input", root);
-  if (first) { first.focus(); first.setSelectionRange?.(first.value.length, first.value.length); }
+  if (first) {
+    first.focus();
+    // checkboxes throw on setSelectionRange
+    if (first.type === "text") first.setSelectionRange(first.value.length, first.value.length);
+  }
   return root;
 }
 
