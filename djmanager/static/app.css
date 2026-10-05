@@ -123,6 +123,7 @@ table.tracks { width: 100%; border-collapse: collapse; table-layout: fixed; }
 }
 .tracks th:hover { color: var(--text-2); }
 .tracks td { padding: 4px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.tracks td.mono { white-space: normal; overflow-wrap: anywhere; font-size: 11px; }
 .tracks tr:nth-child(even) td { background: var(--bg-2); }
 .tracks tbody tr:hover td { background: var(--select-hover); }
 .tracks tr.sel td { background: var(--select) !important; color: #fff; }
