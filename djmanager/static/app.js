@@ -340,6 +340,11 @@ async function renderGenre(deck, view) {
     letter: node.spotify_url ? "S" : "L", orange: !node.spotify_url, title: esc(node.key.split("_").map((p) => p.replace(/-/g, " ")).join(" › ")), sub,
     meters: [[node.count, "IN GENRE"], [node.own_count, "OWN"], [local(), "LOCAL"]], tools,
   });
+  const missing = S.rows.filter((r) => r.playlist === key && (r.status === "failed" || r.status === "unavailable")).length;
+  if (missing && node.spotify_url) {
+    $(".tools", deck).insertAdjacentHTML("afterbegin",
+      `<button class="btn orange" onclick="retryDownloads(${js(key)})" title="Download the missing songs again, including those not found on YouTube before">↻ RETRY DOWNLOADS (${missing})</button>`);
+  }
   renderTable(view, { showPlaylist: node.children.length > 0, selectable: node.has_playlist, playlistKey: key });
 }
 
@@ -377,8 +382,14 @@ function renderTable(view, opts) {
   }
   S.visible = rows;
   const th = (col, label, cls = "") => `<th class="${cls}" data-sort="${col}">${label}${S.sort.col === col ? (S.sort.dir > 0 ? " ▲" : " ▼") : ""}</th>`;
-  const badge = (r) => r.status === "ok" ? (r.source === "spotify" ? `<span class="badge spotify">SPOTIFY</span>` : "")
-    : `<span class="badge ${r.status}">${r.status.toUpperCase()}</span>`;
+  const STATUS_LABEL = { failed: "DOWNLOAD FAILED", unavailable: "NOT ON YOUTUBE" };
+  const badge = (r) => {
+    if (r.status === "ok") return r.source === "spotify" ? `<span class="badge spotify">SPOTIFY</span>` : "";
+    const label = `<span class="badge ${r.status}" title="${esc(r.download_error || "")}">${STATUS_LABEL[r.status] || r.status.toUpperCase()}</span>`;
+    return STATUS_LABEL[r.status]
+      ? `${label} <button class="btn tiny" data-link="${esc(r.id)}" title="Use a file you downloaded yourself">LINK FILE…</button>`
+      : label;
+  };
   view.innerHTML = `
     <div class="filterbar">
       <input type="text" id="filter" placeholder="Search title, artist, album, path…" value="${esc(S.filter)}">
@@ -417,6 +428,7 @@ function renderTable(view, opts) {
     $$("tbody tr", view).forEach((tr) => tr.addEventListener("click", (ev) => {
       const id = tr.dataset.id;
       const row = S.rows.find((r) => r.id === id);
+      if (ev.target.closest("[data-link]")) return;  // the LINK FILE button, not a selection
       if (row && row.status === "deleted") return;
       if (ev.shiftKey && S.lastClicked) {
         const ids = S.visible.map((r) => r.id);
@@ -561,6 +573,24 @@ function openSplitDialog(key, ids, nameHint = "") {
   upd();
 }
 
+function retryDownloads(key) {
+  runJob(api("POST", `/api/playlists/${encodeURIComponent(key)}/retry-downloads`));
+}
+
+function linkFile(trackId) {
+  const r = S.rows.find((x) => x.id === trackId);
+  browse(`LINK A FILE · ${r ? r.artists + " - " + r.title : ""}`, "", true, async (path) => {
+    const res = await act(() => api("POST", `/api/tracks/${encodeURIComponent(trackId)}/link`,
+      { path, playlist: S.view.type === "genre" ? S.view.key : null }));
+    if (res && res.job) follow(res.job);
+  }, "audio");
+}
+
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-link]");
+  if (b) { ev.stopPropagation(); linkFile(b.dataset.link); }
+});
+
 function syncPlaylist(key) {
   runJob(api("POST", `/api/playlists/${encodeURIComponent(key)}/sync`));
 }
@@ -601,12 +631,12 @@ async function showBlacklist(key) {
   }] : [])]);
 }
 
-async function browse(title, startPath, wantFile, onPick) {
+async function browse(title, startPath, wantFile, onPick, kind = "nml") {
   let current = startPath || "";
   const root = modal(title, `<div class="mono" id="fs-path"></div><div class="fs-list" id="fs-list"></div>`,
     [{ label: "Cancel" }, ...(wantFile ? [] : [{ label: "Use this folder", cls: "accent", action: () => onPick(current) }])]);
   const load = async (p) => {
-    const res = await act(() => api("GET", `/api/browse?files=${wantFile}&path=${encodeURIComponent(p)}`));
+    const res = await act(() => api("GET", `/api/browse?files=${wantFile}&kind=${kind}&path=${encodeURIComponent(p)}`));
     if (!res) return;
     current = res.path;
     $("#fs-path", root).textContent = res.path || "Computer";
@@ -666,6 +696,7 @@ function renderSettings(view) {
     ${field("Format", select("audio_format", [["mp3", "MP3"], ["m4a", "M4A / AAC"]]))}
     ${field("Bitrate", text("bitrate", "320k"), "e.g. 320k, 256k. For M4A use <span class='mono'>disable</span> to keep the source quality without re-encoding.")}
     ${field("Parallel downloads", text("download_threads", "", "number"))}
+    ${field("Retries", text("download_retries", "", "number"), "Extra attempts for songs that fail with a download error. Songs not found on YouTube are not retried automatically.")}
     ${field("YouTube cookie file", text("cookie_file", "optional, cookies.txt for YouTube Music Premium quality"))}
 
     <h2>UPDATES</h2>

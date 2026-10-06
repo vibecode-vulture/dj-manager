@@ -131,7 +131,7 @@ table.tracks { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .tracks .num { width: 46px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 .tracks .time { width: 60px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); }
 .tracks th.time { font-size: 10px; color: var(--muted); }
-.tracks .st { width: 88px; }
+.tracks .st { width: 200px; }
 .tracks .rating { width: 78px; }
 .tracks .bpm { width: 58px; text-align: right; font-variant-numeric: tabular-nums; }
 .tracks .key { width: 48px; text-align: center; color: var(--active); font-weight: 600; }
@@ -246,3 +246,10 @@ table.simple { width: 100%; border-collapse: collapse; }
 .panel.rec { max-width: 1240px; }
 .rec-reasons { margin: 0 0 6px; padding-left: 18px; color: var(--text-2); font-size: 12px; }
 .rec-head .badge { margin-right: 2px; }
+
+/* ---------- songs without a file */
+.badge.failed { background: var(--orange); color: var(--orange-ink); }
+.badge.unavailable { background: var(--control); color: var(--red); }
+.tracks tr.st-failed td, .tracks tr.st-unavailable td { color: var(--muted); }
+.tracks tr.st-failed td.st, .tracks tr.st-unavailable td.st { white-space: nowrap; overflow: visible; }
+.tracks td .btn.tiny { padding: 1px 6px; font-size: 10px; }
