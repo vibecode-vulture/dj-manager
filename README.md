@@ -4,7 +4,7 @@ Single source of truth for a genre-based music collection. Spotify playlists (vi
 [spotdl](https://github.com/spotDL/spotify-downloader)) are the discovery tool, folders on
 disk store every song once, and Traktor gets generated playlists for every genre layer.
 
-![A genre playlist linked to Spotify, with LOCAL and DELETED tracks](docs/screenshots/genre-playlist.png)
+![A genre playlist linked to Spotify: ratings, BPM and key, LOCAL, NOT ON YOUTUBE and DELETED songs](docs/screenshots/genre-playlist.png)
 
 The spec is in `requirements.txt`.
 
@@ -185,6 +185,10 @@ not always right; grouping by style similarity is more reliable than single labe
 
 ## Screenshots
 
+The screenshots use a demo library of generated test tones, which is why the AI style
+recognition calls some of them "Chiptune" or "Minimal". They are created with
+`packaging/screenshots.py` (see *Building and releasing*).
+
 **Genre with sub genres.** A genre's playlist contains every track of its sub genres. The
 *Playlists* column shows which playlist(s) a track belongs to; each file is still stored
 only once on disk.
@@ -200,6 +204,16 @@ will be created and the Traktor playlists it ends up in.
 Spotify playlist. Unblock them to get them back on the next update.
 
 ![Blacklist of a playlist](docs/screenshots/blacklist.png)
+
+**Split recommendations** (optional). Groups that several signals agree on, with the reasons
+and the songs to keep or drop; the map shows the genre by BPM × energy, sound or style, and
+groups can be lassoed. *Split these songs* pre-fills the split dialog.
+
+![Split recommendations for a genre](docs/screenshots/recommendations.png)
+
+![The recommendations map with a lasso selection](docs/screenshots/recommendations-map.png)
+
+![The split dialog, pre-filled from a recommendation](docs/screenshots/split-dialog.png)
 
 **Duplicates.** Copies of the same song found during the import. DJ Manager uses one file;
 the others are listed so you can delete them.
@@ -270,7 +284,16 @@ python packaging/build.py --repo owner/repo
 `packaging/windows/installer.iss`. Never change its `AppId`: it is what lets new versions
 install over old ones.
 
-**Release:** bump `__version__` in `djmanager/__init__.py`, commit, then
+**Release:** first retake the README screenshots so they show the new version:
+
+```bash
+python packaging/screenshots.py --analysis-python ~/.local/share/dj-manager/deps/venv/bin/python \
+    --models ~/.local/share/dj-manager/deps/models    # models: only needed for the AI styles
+```
+
+It builds a demo library, runs DJ Manager from source with the real analysis and captures
+every view with headless Firefox (needs `selenium` and `firefox`). Check the images, commit
+them, then bump `__version__` in `djmanager/__init__.py`, commit, and
 
 ```bash
 git tag v0.2.0 && git push origin main v0.2.0
