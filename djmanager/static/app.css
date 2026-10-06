@@ -229,3 +229,20 @@ table.simple { width: 100%; border-collapse: collapse; }
   .indicators { display: none; }
   .field { grid-template-columns: 1fr; }
 }
+
+/* ---------- split recommendations */
+.rec-card { background: var(--panel); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 10px; }
+.rec-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+.rec-head .help { margin: 0; }
+.rec-songs { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 10px; max-height: 190px; overflow: auto; }
+.song-chip { display: inline-flex; gap: 6px; align-items: center; background: var(--raised); padding: 3px 8px;
+  border-radius: 2px; font-size: 12px; max-width: 360px; cursor: pointer; }
+.song-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.song-chip i { color: var(--muted); font-style: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+.rec-map { width: 100%; max-width: 1200px; aspect-ratio: 1200 / 520; border-radius: var(--radius); cursor: crosshair; display: block; }
+.map-tools { margin-bottom: 8px; flex-wrap: wrap; }
+.map-tools #map-info { flex: 1; margin: 0; }
+.rec-missing { background: var(--panel); padding: 8px 12px; border-radius: var(--radius); }
+.panel.rec { max-width: 1240px; }
+.rec-reasons { margin: 0 0 6px; padding-left: 18px; color: var(--text-2); font-size: 12px; }
+.rec-head .badge { margin-right: 2px; }

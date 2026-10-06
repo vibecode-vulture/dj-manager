@@ -283,6 +283,7 @@ async function render() {
   try {
     switch (S.view.type) {
       case "genre": return await renderGenre(deck, view);
+      case "recommend": return await renderRecommend(deck, view);
       case "collection": return await renderList(deck, view, "/api/collection", "Track Collection", "All tracks managed by DJ Manager, each stored once on disk.");
       case "removed": return await renderList(deck, view, "/api/removed", "Removed", "Tracks that are in no genre anymore. They stay on disk (moved to _removed/ when their playlist was removed) - delete the files yourself and they disappear from this list.");
       case "duplicates": return await renderList(deck, view, "/api/duplicates", "Duplicates", "Songs found more than once on disk. DJ Manager uses the first file; the extra copies listed here can be deleted manually.");
@@ -325,6 +326,7 @@ async function renderGenre(deck, view) {
       ${node.spotify_url ? "" : `<button class="btn accent" onclick="createSpotifyPlaylist(${js(key)})" title="Create a private Spotify playlist with the songs of this genre and link it">+ SPOTIFY PLAYLIST</button>`}
       <button class="btn" onclick="editLink(${js(key)})">🔗 LINK</button>
       <button class="btn" onclick="splitSelected(${js(key)})" title="Move the selected songs into a new sub genre">⑂ SPLIT</button>
+      ${S.app?.settings.rec_enabled ? `<button class="btn" onclick="setView({type:'recommend', key:${js(key)}})" title="Suggested groups for a new sub genre">✦ RECOMMEND</button>` : ""}
       <button class="btn" onclick="showBlacklist(${js(key)})">⊘ BLACKLIST (${node.blacklist})</button>
       <button class="btn" id="btn-remove-tracks" onclick="removeSelected(${js(key)})">− REMOVE SELECTED</button>
       <button class="btn danger" onclick="removePlaylist(${js(key)})">✕ PLAYLIST</button>`
@@ -523,12 +525,17 @@ function createSpotifyPlaylist(key) {
 function splitSelected(key) {
   const ids = [...S.selected].filter((id) => S.rows.find((r) => r.id === id && r.playlist === key && r.status !== "deleted"));
   if (!ids.length) return toast("Select the songs of this genre that should move into the new sub genre (click / ctrl / shift)");
+  openSplitDialog(key, ids);
+}
+
+function openSplitDialog(key, ids, nameHint = "") {
+  if (!ids.length) return toast("No songs selected");
   if (needSpotify()) return;
   const node = findNode(key);
   const rest = node.own_count - ids.length;
   const root = modal("SPLIT INTO SUB GENRE", `
     <div class="field"><label>Songs</label><span>${ids.length} selected · ${rest} stay in <span class="mono">${esc(key)}</span></span></div>
-    <div class="field"><label>Sub genre name</label><input type="text" id="split-name" placeholder="speed garage"></div>
+    <div class="field"><label>Sub genre name</label><input type="text" id="split-name" placeholder="speed garage" value="${esc(nameHint)}"></div>
     <div class="preview" id="split-preview"></div>
     <p class="help">${node.spotify_url ? "The genre is updated from Spotify first. " : ""}Two new private playlists are created in your Spotify account:
       one for the new sub genre with the selected songs and one for <span class="mono">${esc(key)}</span> with the remaining songs.
@@ -685,6 +692,8 @@ function renderSettings(view) {
       "Results outside are halved or doubled, e.g. 87 BPM becomes 174 BPM with a range of 90-180.")}
     ${field("Parallel analyses", text("analysis_workers", "", "number"), "0 = automatic (CPU cores - 1, at most 4).")}
 
+    ${recSettingsHtml(field, check, text)}
+
     <h2>GENERAL</h2>
     ${field("On start", check("update_on_start", "Update all playlists when DJ Manager starts"))}
     ${field("", check("scan_on_start", "Look for songs added to the music folder outside DJ Manager"))}
@@ -698,6 +707,10 @@ function renderSettings(view) {
       ? `${esc(info.latest)} available <button class="btn orange" onclick="applyUpdate()">INSTALL ${esc(info.latest)}</button>`
       : esc(info.message || (info.available ? `${info.latest} available` : "up to date"));
     refreshState();
+  });
+  const master = $("[data-k=rec_enabled]", view);
+  if (master) master.addEventListener("change", async () => {
+    if (await act(() => api("POST", "/api/settings", { rec_enabled: master.checked }))) refresh();
   });
   $("#save-settings").addEventListener("click", async () => {
     const values = {};
@@ -803,6 +816,194 @@ async function renderBackups(view) {
       <p class="help">Only needed if DJ Manager's own data is broken. Files moved since the backup are not moved back.</p>` : ""}`,
     [{ label: "Cancel" }, { label: "Restore", cls: "orange", action: (r) => runJob(api("POST", `/api/backups/${b.dataset.restore}/restore`, { restore_library: !!$("#restore-lib", r)?.checked })) }]);
   }));
+}
+
+// ------------------------------------------------------------------ split recommendations
+const SIGNAL_LABEL = { tempo: "BPM", energy: "ENERGY", sound: "SOUND", styles: "AI STYLE" };
+const MAP_LABEL = { bpm_energy: "BPM × Energy", sound: "Sound", style: "Style (AI)" };
+
+async function renderRecommend(deck, view) {
+  const key = S.view.key;
+  const node = findNode(key);
+  if (!node) { setView({ type: "collection" }); return; }
+  deck.innerHTML = deckHtml({
+    letter: "✦", title: `Recommendations · ${esc(node.key.split("_").map((p) => p.replace(/-/g, " ")).join(" › "))}`,
+    sub: "Suggested groups for a new sub genre. Nothing changes until you confirm a split.",
+    meters: [[node.own_count, "OWN SONGS"]],
+    tools: `<button class="btn" onclick="setView({type:'genre', key:${js(key)}})">← BACK TO GENRE</button>`,
+  });
+  view.innerHTML = `<div class="empty">Looking for groups…</div>`;
+  const [rec, rows] = await Promise.all([api("GET", `/api/genre/${encodeURIComponent(key)}/recommendations`),
+    api("GET", `/api/genre/${encodeURIComponent(key)}/tracks`)]);
+  if (S.view.type !== "recommend" || S.view.key !== key) return;
+  const own = rows.filter((r) => r.playlist === key && r.status !== "deleted");
+  S.rec = { key, rec, byId: new Map(own.map((r) => [r.id, r])), mapSel: new Set(), mapSpace: null, focus: null };
+  const c = rec.coverage, t = rec.tasks;
+  const missing = [];
+  if (rec.signals.bpm || rec.signals.energy) {
+    if (c.bpm < c.songs) missing.push(`${c.songs - c.bpm} songs without BPM`);
+  }
+  if ((rec.signals.energy || rec.signals.timbre) && c.features < c.songs)
+    missing.push(`${c.songs - c.features} songs without energy/sound <button class="btn tiny" onclick="analyseFor(['features'])">ANALYSE</button>`);
+  if (rec.signals.styles && c.styles < c.songs)
+    missing.push(`${c.songs - c.styles} songs without AI style <button class="btn tiny" onclick="analyseFor(['styles'])">ANALYSE</button>`);
+  const cards = rec.suggestions.map((sg, i) => `
+    <div class="rec-card" data-i="${i}">
+      <div class="rec-head">${sg.signals.map((x) => `<span class="badge spotify">${SIGNAL_LABEL[x] || x.toUpperCase()}</span>`).join("")}
+        <b>${esc(sg.title)}</b>${sg.signals.length > 1 ? `<span class="help">${sg.signals.length} signals agree</span>` : ""}</div>
+      <ul class="rec-reasons">${sg.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+      <div class="rec-songs">${sg.track_ids.map((id) => songChip(id, true)).join("")}</div>
+      <div class="row"><button class="btn accent" data-split="${i}">⑂ SPLIT THESE SONGS…</button>
+        <button class="btn" data-focus="${i}">SHOW ON MAP</button></div>
+    </div>`).join("");
+  const spaces = Object.keys(rec.maps).filter((k) => rec.maps[k].length);
+  view.innerHTML = `<div class="panel rec">
+    ${missing.length ? `<p class="help rec-missing">Not all songs are analysed yet: ${missing.join(" · ")}</p>` : ""}
+    <h2>SUGGESTIONS</h2>
+    ${cards || `<p class="help">${c.songs < 2 * rec.min_group ? `At least ${2 * rec.min_group} songs are needed for suggestions.` : "No clear group found with the enabled signals - this genre looks consistent. You can still pick groups on the map."}</p>`}
+    <h2>MAP</h2>
+    ${spaces.length ? `<div class="row map-tools">${spaces.map((k) => `<button class="btn ${k === spaces[0] ? "accent" : ""}" data-space="${k}">${MAP_LABEL[k] || k}</button>`).join("")}
+        <span class="help" id="map-info">Draw around songs to select them (shift adds, double-click clears).</span>
+        <button class="btn accent" id="map-split" disabled>⑂ SPLIT SELECTION…</button></div>
+      <canvas id="rec-map" class="rec-map" width="1200" height="520"></canvas>
+      <div class="rec-songs" id="map-songs"></div>`
+      : `<p class="help">The map needs analysed songs (BPM + energy, sound or AI style).</p>`}
+  </div>`;
+  $$("[data-split]", view).forEach((b) => b.addEventListener("click", () => {
+    const card = b.closest(".rec-card");
+    const ids = $$("input[type=checkbox]:checked", card).map((x) => x.value);
+    openSplitDialog(key, ids, rec.suggestions[+b.dataset.split].name_hint);
+  }));
+  $$("[data-focus]", view).forEach((b) => b.addEventListener("click", () => {
+    S.rec.focus = new Set(rec.suggestions[+b.dataset.focus].track_ids);
+    drawMap();
+    $("#rec-map").scrollIntoView({ behavior: "smooth", block: "center" });
+  }));
+  $$("[data-space]", view).forEach((b) => b.addEventListener("click", () => {
+    $$("[data-space]", view).forEach((x) => x.classList.toggle("accent", x === b));
+    S.rec.mapSpace = b.dataset.space;
+    drawMap();
+  }));
+  if (spaces.length) {
+    S.rec.mapSpace = spaces[0];
+    setupMap();
+    drawMap();
+    $("#map-split").addEventListener("click", () => openSplitDialog(key, [...S.rec.mapSel]));
+  }
+}
+
+function songChip(id, checkbox) {
+  const r = S.rec.byId.get(id);
+  if (!r) return "";
+  const style = r.styles && r.styles[0] ? ` · ${esc(r.styles[0][0])}` : "";
+  const facts = `${r.bpm ? r.bpm.toFixed(0) + " BPM" : ""}${r.energy != null ? " · E" + r.energy : ""}${style}`;
+  return `<label class="song-chip" title="${esc(r.artists)} - ${esc(r.title)}">${checkbox ? `<input type="checkbox" value="${esc(id)}" checked>` : ""}
+    <span>${esc(r.title)}</span><i>${esc(r.artists)}${facts ? " · " + facts : ""}</i></label>`;
+}
+
+function analyseFor(tasks) {
+  runJob(api("POST", "/api/analysis", { mode: "pending", tasks }));
+  toast("Analysis started - come back to the recommendations when it is done");
+}
+
+function mapPoints() {
+  const raw = (S.rec.rec.maps[S.rec.mapSpace] || []).filter((p) => S.rec.byId.has(p[0]));
+  if (!raw.length) return [];
+  const xs = raw.map((p) => p[1]), ys = raw.map((p) => p[2]);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const cv = $("#rec-map"), pad = 40;
+  return raw.map(([id, x, y]) => ({
+    id, x: pad + ((x - x0) / ((x1 - x0) || 1)) * (cv.width - 2 * pad),
+    y: cv.height - pad - ((y - y0) / ((y1 - y0) || 1)) * (cv.height - 2 * pad),
+  }));
+}
+
+function drawMap(lasso) {
+  const cv = $("#rec-map");
+  if (!cv) return;
+  const ctx = cv.getContext("2d");
+  const css = getComputedStyle(document.documentElement);
+  const col = (n) => css.getPropertyValue(n).trim();
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = col("--bg-2"); ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = col("--muted"); ctx.font = "12px sans-serif";
+  if (S.rec.mapSpace === "bpm_energy") {
+    ctx.fillText("BPM →", cv.width - 60, cv.height - 12);
+    ctx.save(); ctx.translate(14, 60); ctx.rotate(-Math.PI / 2); ctx.fillText("ENERGY →", -40, 0); ctx.restore();
+  } else {
+    ctx.fillText("similar songs are close together", 12, 18);
+  }
+  S.rec.points = mapPoints();
+  for (const p of S.rec.points) {
+    const sel = S.rec.mapSel.has(p.id), focus = S.rec.focus && S.rec.focus.has(p.id);
+    ctx.beginPath(); ctx.arc(p.x, p.y, sel ? 6 : 4.5, 0, 2 * Math.PI);
+    ctx.fillStyle = sel ? col("--yellow") : focus ? col("--orange") : col("--active");
+    ctx.globalAlpha = sel || focus || !S.rec.focus ? 0.95 : 0.35;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  if (lasso && lasso.length > 1) {
+    ctx.strokeStyle = col("--yellow"); ctx.setLineDash([4, 4]); ctx.beginPath();
+    lasso.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+  }
+  const n = S.rec.mapSel.size;
+  $("#map-split").disabled = !n;
+  $("#map-info").textContent = n ? `${n} songs selected` : "Draw around songs to select them (shift adds, double-click clears).";
+  $("#map-songs").innerHTML = [...S.rec.mapSel].map((id) => songChip(id, false)).join("");
+}
+
+function setupMap() {
+  const cv = $("#rec-map");
+  const pos = (ev) => { const r = cv.getBoundingClientRect(); return [(ev.clientX - r.left) * cv.width / r.width, (ev.clientY - r.top) * cv.height / r.height]; };
+  let lasso = null, additive = false;
+  cv.addEventListener("mousedown", (ev) => { lasso = [pos(ev)]; additive = ev.shiftKey; });
+  cv.addEventListener("mousemove", (ev) => {
+    if (lasso) { lasso.push(pos(ev)); drawMap(lasso); return; }
+    const [x, y] = pos(ev);
+    const hit = (S.rec.points || []).find((p) => Math.hypot(p.x - x, p.y - y) < 7);
+    const r = hit && S.rec.byId.get(hit.id);
+    cv.title = r ? `${r.artists} - ${r.title}${r.bpm ? " · " + r.bpm.toFixed(1) + " BPM" : ""}${r.energy != null ? " · energy " + r.energy : ""}` : "";
+  });
+  window.addEventListener("mouseup", () => {
+    if (!lasso) return;
+    const poly = lasso;
+    lasso = null;
+    if (poly.length < 3) { drawMap(); return; }
+    const inside = ([x, y]) => {  // ray casting
+      let hit = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i], [xj, yj] = poly[j];
+        if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+      }
+      return hit;
+    };
+    if (!additive) S.rec.mapSel = new Set();
+    for (const p of S.rec.points) if (inside([p.x, p.y])) S.rec.mapSel.add(p.id);
+    drawMap();
+  });
+  cv.addEventListener("dblclick", () => { S.rec.mapSel = new Set(); S.rec.focus = null; drawMap(); });
+}
+
+function recSettingsHtml(field, check, text) {
+  const t = S.app.analysis?.tasks || {};
+  const st = (task) => t[task] ? `${t[task].done} done · ${t[task].pending} pending${t[task].failed ? " · " + t[task].failed + " failed" : ""}` : "";
+  const s = S.app.settings;
+  return `
+    <h2>SPLIT RECOMMENDATIONS</h2>
+    ${field("Recommendations", check("rec_enabled", "Enable split recommendations (optional)"),
+      "Adds a ✦ RECOMMEND button to every genre: suggested groups of songs for a new sub genre and a map to pick groups yourself. Suggestions only pre-fill the split dialog.")}
+    ${s.rec_enabled ? `
+    ${field("BPM groups", check("rec_bpm", "Split by tempo"), "Uses the BPM analysis, nothing extra to analyse.")}
+    ${field("Energy & sound", `${check("rec_energy", "Energy level (1-10)")} &nbsp; ${check("rec_timbre", "Sound similarity")}
+        <div class="row" style="margin-top:6px">${check("features_auto", "Analyse new songs automatically")}
+        <button class="btn" onclick="analyseFor(['features'])">ANALYSE COLLECTION NOW</button><span class="help">${st("features")}</span></div>`,
+      "About 2 seconds extra per song, analysed together with BPM and key.")}
+    ${field("AI styles", `${check("rec_styles", "Style recognition (400 Discogs styles, e.g. Speed Garage)")}
+        <div class="row" style="margin-top:6px">${check("styles_auto", "Analyse new songs automatically")}
+        <button class="btn" onclick="analyseFor(['styles'])">ANALYSE COLLECTION NOW</button><span class="help">${st("styles")}</span></div>`,
+      "About 3-4 seconds per song. Downloads onnxruntime and the Discogs-EffNet model by MTG (about 35 MB, CC BY-NC-ND 4.0: free for non-commercial use). Suggestions get a style name.")}
+    ${field("Smallest group", text("rec_min_group", "", "number"), "Groups with fewer songs are not suggested.")}` : ""}`;
 }
 
 // ------------------------------------------------------------------ boot
