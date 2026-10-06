@@ -70,7 +70,12 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          generate_release_notes: true
+      - name: Publish
+        # gh is preinstalled on the runners. If an earlier attempt already created the
+        # release (e.g. an interrupted upload), the files are (re-)uploaded to it instead.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --title "DJ Manager ${GITHUB_REF_NAME#v}" --generate-notes \
+            || gh release upload "$GITHUB_REF_NAME" dist/* --clobber
