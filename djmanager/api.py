@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import string
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -23,6 +23,13 @@ from .spotify_api import SpotifyAPIError
 from .updater import UpdateError
 
 STATIC = Path(__file__).parent / "static"
+
+
+def stored_elsewhere(lib: Library, track: Track, playlist_key: str | None) -> str:
+    """Folder of the file if it lives in another genre's folder (stored once on disk)."""
+    pl = lib.playlists.get(playlist_key) if playlist_key else None
+    folder = PurePosixPath(track.path).parent.as_posix()
+    return folder if pl is not None and folder.lower() != pl.folder.lower() else ""
 
 
 def track_row(lib: Library, track: Track, source: str | None = None, playlist_key: str | None = None, status: str = "",
@@ -49,6 +56,7 @@ def track_row(lib: Library, track: Track, source: str | None = None, playlist_ke
         "bpm": track.bpm, "key": format_key(track.key, notation), "key_sort": key_sort(track.key),
         "analysis": track.analysis, "analysis_error": track.analysis_error,
         "download_error": track.download_error, "has_file": exists,
+        "stored_in": stored_elsewhere(lib, track, playlist_key) if exists else "",
         "energy": track.energy, "styles": [[label.split("---")[-1], p] for label, p in track.styles[:3]],
     }
 
@@ -201,9 +209,11 @@ def create_app(service: Service | None = None) -> FastAPI:
 
     @app.get("/api/duplicates")
     def duplicates():
-        library = lib()
-        with library.lock:
-            return [row(library, t) for t in library.tracks.values() if t.duplicates]
+        return svc.duplicate_report()
+
+    @app.post("/api/duplicates/clean")
+    def clean_duplicates(data: dict = Body(default={})):
+        return job_ref(svc.submit_clean_duplicates(data.get("track_ids"), data.get("uncertain")))
 
     @app.get("/api/genre/{key}/recommendations")
     def recommendations(key: str):

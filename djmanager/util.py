@@ -120,3 +120,21 @@ def download(url: str, target, timeout: float = 120) -> None:
     with urlopen(req, timeout=timeout) as resp, open(tmp, "wb") as out:
         shutil.copyfileobj(resp, out, 1 << 20)
     os.replace(tmp, target)
+
+
+class TrashError(OSError):
+    pass
+
+
+def move_to_trash(path: Path) -> None:
+    """Recycle Bin (Windows) / trash (Linux). Never falls back to deleting permanently."""
+    try:
+        from send2trash import send2trash
+    except ImportError as exc:  # pragma: no cover - dependency
+        raise TrashError("send2trash is not installed") from exc
+    try:
+        send2trash(str(path))
+    except Exception as exc:  # noqa: BLE001 - every failure means: file stays
+        raise TrashError(f"could not move {path} to the trash: {exc}") from exc
+    if Path(path).exists():
+        raise TrashError(f"{path} is still there after moving it to the trash")

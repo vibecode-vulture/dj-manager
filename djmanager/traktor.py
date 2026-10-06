@@ -260,6 +260,13 @@ class Collection:
         self.entries[loc.key.lower()] = entry
         return True
 
+    def cue_data(self, path: Path) -> int:
+        """How much the user worked with this file in Traktor: cue points (+1 for an analysed grid)."""
+        entry = self.entries.get(self.mapper.key(path).lower())
+        if entry is None:
+            return 0
+        return len(entry.findall("CUE_V2")) + (1 if entry.find("TEMPO") is not None else 0)
+
     def ranking(self, path: Path) -> int:
         """Traktor's rating of a file (0-255, 0 = not rated)."""
         entry = self.entries.get(self.mapper.key(path).lower())

@@ -190,3 +190,12 @@ def traktor_playlists(nml):
     return result
 
 
+
+
+@pytest.fixture(autouse=True)
+def no_real_trash(monkeypatch):
+    """Tests must never move files into the user's real trash."""
+    def refuse(path):
+        raise AssertionError(f"test tried to use the real trash for {path}")
+    monkeypatch.setattr("djmanager.dedupe.move_to_trash", refuse)
+    monkeypatch.setattr("djmanager.util.move_to_trash", refuse)

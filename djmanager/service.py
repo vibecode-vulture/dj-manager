@@ -11,6 +11,7 @@ from .analysis import STYLE_MODEL_FILES, TASK_LABELS, Analyzer, Result, format_k
 from .recommend import RecommendError, run_recommendations
 from .audio import popm_to_stars, read_info
 from .backup import BackupManager
+from . import dedupe
 from .deps import DependencyManager
 from .jobs import Job, JobCancelled, JobRunner
 from .procs import kill_all
@@ -743,6 +744,59 @@ class Service:
                 return f"Current dependency versions marked as {action}"
             raise ServiceError(f"Unknown action {action}")
         return self.jobs.submit(f"Dependencies: {action}", run)
+
+    # ------------------------------------------------------------------ duplicates
+    def _cue_data(self):
+        """Traktor cue data per file, to keep the copy the user worked with."""
+        nml = self.nml_path()
+        if not nml or not nml.exists():
+            return None
+        try:
+            return Collection(nml, mapper_for(self.settings, nml)).cue_data
+        except TraktorError:
+            return None
+
+    def duplicate_report(self) -> dict:
+        lib = self.require_library()
+        with lib.lock:
+            groups = dedupe.plan(lib, cue_data=self._cue_data())
+
+        def copy(c):
+            return {"path": c.path, "size": c.size, "duration": round(c.duration), "bitrate": c.bitrate,
+                    "lossless": c.lossless, "cues": c.cues, "evidence": c.evidence}
+        return {
+            "groups": [{"track_id": g.track.id, "title": g.track.title, "artists": g.track.artist_line,
+                        "playlists": [p.key for p in lib.playlists_of(g.track.id)],
+                        "keep": copy(g.keep), "reason": g.reason,
+                        "remove": [copy(c) for c in g.remove], "uncertain": [copy(c) for c in g.uncertain]}
+                       for g in groups],
+            "songs": len(groups),
+            "certain_files": sum(len(g.remove) for g in groups),
+            "certain_bytes": sum(c.size for g in groups for c in g.remove),
+            "uncertain_files": sum(len(g.uncertain) for g in groups),
+        }
+
+    def submit_clean_duplicates(self, track_ids: list[str] | None = None, uncertain: list[str] | None = None) -> Job:
+        """Move duplicate copies to the trash (certain ones, plus the selected uncertain ones)."""
+        lib = self.require_library()
+        nml = self.nml_path()
+        if nml and nml.exists() and traktor_running():
+            raise TraktorError("Close Traktor first - its references to the removed copies are updated right after")
+
+        def run(job: Job) -> str:
+            ids = set(track_ids) if track_ids else None
+            with lib.lock:
+                groups = dedupe.plan(lib, ids, cue_data=self._cue_data())
+                job.write(f"Cleaning up {len(groups)} songs - copies go to the trash, one file per song is kept")
+                try:
+                    result = dedupe.clean(lib, groups, job.write, set(uncertain or []))
+                finally:
+                    lib.save()
+            self.write_traktor(job, "cleaning up duplicates")
+            mb = result["freed"] / 1e6
+            return (f"{result['removed']} duplicate files moved to the trash ({mb:.0f} MB)"
+                    + (f", {result['skipped']} skipped - see the log" if result["skipped"] else ""))
+        return self.jobs.submit("Clean up duplicates", run, dedupe=True)
 
     def submit_retry_downloads(self, key: str) -> Job:
         """Download the genre's missing songs again, including those not found on YouTube before."""
