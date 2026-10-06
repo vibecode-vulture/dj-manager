@@ -107,8 +107,8 @@ a { color: var(--active); cursor: pointer; }
 .deck .title { font-size: 20px; font-weight: 600; color: var(--text); }
 .deck .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .deck .sub code { font-family: var(--mono); color: var(--text-2); font-size: 11px; }
-.deck .info { min-width: 0; flex: 1; }
-.deck .tools { display: flex; gap: 4px; flex-wrap: wrap; }
+.deck .info { min-width: min(100%, 340px); flex: 1 1 340px; }  /* tools wrap below instead of squeezing the title */
+.deck .tools { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .deck .meter { display: flex; gap: 18px; }
 .deck .meter div { text-align: right; }
 .deck .meter b { display: block; font-size: 20px; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
