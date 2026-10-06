@@ -71,3 +71,66 @@ def wait(job, timeout=20):
     if job.status == "failed":
         raise AssertionError(f"{job.title} failed: {job.error}\n" + "\n".join(job.log[-20:]))
     return job
+
+
+class FakeSpotifyServer:
+    """In-memory Spotify Web API (token, /me, create playlist, add/read items)."""
+
+    def __init__(self, user="dj"):
+        self.user = user
+        self.playlists = {}  # id -> {"name", "owner", "public", "items": [track ids]}
+        self.tracks = {}     # id -> track object
+        self.calls = []
+        self.refreshes = 0
+
+    def add_foreign(self, pid, owner="someone"):
+        self.playlists[pid] = {"name": "foreign", "owner": owner, "public": True, "items": []}
+
+    def transport(self, method, url, headers, body):
+        import json as _json
+        import re as _re
+        from urllib.parse import parse_qs, urlparse
+        self.calls.append((method, url))
+        u = urlparse(url)
+        if url.startswith("https://accounts.spotify.com/api/token"):
+            self.refreshes += 1
+            return 200, {}, _json.dumps({"access_token": f"tok{self.refreshes}", "expires_in": 3600,
+                                          "refresh_token": "refresh"}).encode()
+        data = _json.loads(body) if body else {}
+        if u.path == "/v1/me":
+            return 200, {}, _json.dumps({"id": self.user, "display_name": "DJ"}).encode()
+        if u.path == "/v1/me/playlists" and method == "POST":
+            pid = f"pl{len(self.playlists):020d}"[:22]
+            self.playlists[pid] = {"name": data["name"], "owner": self.user, "public": data.get("public"), "items": []}
+            return 201, {}, _json.dumps({"id": pid, "external_urls": {"spotify": f"https://open.spotify.com/playlist/{pid}"}}).encode()
+        m = _re.fullmatch(r"/v1/playlists/(\w+)(/items)?", u.path)
+        if m:
+            pl = self.playlists.get(m.group(1))
+            if pl is None:
+                return 404, {}, b'{"error": {"message": "not found"}}'
+            if not m.group(2):
+                return 200, {}, _json.dumps({"owner": {"id": pl["owner"]}}).encode()
+            if method == "POST":
+                assert pl["owner"] == self.user and len(data["uris"]) <= 100
+                pl["items"] += [x.split(":")[-1] for x in data["uris"]]
+                return 201, {}, b'{"snapshot_id": "x"}'
+            if pl["owner"] != self.user:
+                return 403, {}, b'{"error": {"message": "Forbidden"}}'
+            q = parse_qs(u.query)
+            offset, limit = int(q.get("offset", ["0"])[0]), int(q.get("limit", ["50"])[0])
+            ids = pl["items"][offset:offset + limit]
+            nxt = f"https://api.spotify.com/v1/playlists/{m.group(1)}/items?offset={offset + limit}&limit={limit}" \
+                if offset + limit < len(pl["items"]) else None
+            items = [{"item": self.tracks.get(i, {"id": i, "name": f"Song {i}", "type": "track",
+                                                  "artists": [{"name": "Artist"}], "duration_ms": 200000,
+                                                  "album": {"name": "Album", "id": "al"}})} for i in ids]
+            return 200, {}, _json.dumps({"items": items, "next": nxt}).encode()
+        return 404, {}, b'{"error": {"message": "unknown endpoint"}}'
+
+
+def connected_api(settings, server):
+    from djmanager.spotify_api import SpotifyAPI
+    settings.spotify_client_id = "client"
+    api = SpotifyAPI(settings, transport=server.transport)
+    api.account.client_id, api.account.refresh_token, api.account.user_id = "client", "refresh", server.user
+    return api
