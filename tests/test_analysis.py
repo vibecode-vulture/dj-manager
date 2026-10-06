@@ -126,6 +126,9 @@ def test_retry_failed_and_reanalyse_all(analysis_env):
 def test_real_engine_on_synthetic_signal(tmp_path, engine):
     import subprocess
 
+    probe = subprocess.run([os.environ["DJM_ANALYSIS_PYTHON"], "-c", f"import {engine}"], capture_output=True)
+    if probe.returncode != 0:
+        pytest.skip(f"{engine} is not installed in DJM_ANALYSIS_PYTHON")
     ffmpeg = os.environ["DJM_FFMPEG"]
     wav = tmp_path / "128bpm-a-minor.wav"
     subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=220:d=40", "-f", "lavfi", "-i", "sine=f=261.63:d=40",
