@@ -44,7 +44,7 @@ First start:
 2. **Settings** → select the main music folder. Existing folders are imported as genres.
    The Traktor `collection.nml` is auto-detected (Windows `Documents/Native Instruments/Traktor x.y.z`,
    Linux: Wine prefixes `~/.wine`, `~/.local/share/wineprefixes/*`, `~/Games/*`) or can be selected.
-3. Optional: own Spotify app credentials and user login (redirect URI `http://127.0.0.1:9900/`).
+3. Optional, needed for splitting genres: connect your Spotify account (see below).
 
 Close Traktor whenever DJ Manager writes the collection. DJ Manager checks for a running
 Traktor and refuses to write while it is open.
@@ -60,6 +60,7 @@ Traktor and refuses to write while it is open.
 | Blacklist | Songs removed manually from a playlist. They are not added again by the next update |
 | Removed | Tracks that are in no genre anymore. They are never deleted; delete the file yourself and they disappear |
 | Duplicates | Copies of the same song found during import. The first file found is used and the others are listed |
+| Split | Selected songs of a genre become a new sub genre, with new Spotify playlists for both |
 
 Songs are identified by the Spotify URL that spotdl embeds, then by ISRC, then by
 artist + title (± 3 s duration).
@@ -67,6 +68,44 @@ artist + title (± 3 s duration).
 **Removing a playlist** deletes its Traktor playlist and folder. Files still used by other
 playlists move into one of their folders, and the rest move to `<music>/_removed/<key>/`.
 Moves are applied to the Traktor collection entries, so cue points and beat grids survive.
+
+## Splitting genres
+
+When a genre grows too big, select the songs that belong together (click, ctrl, shift)
+and press **SPLIT**. Enter the name of the new sub genre, e.g. `speed garage` in
+`house_ukg-garage`. Only songs of the genre's own playlist can be selected; songs of
+existing sub genres are split from there.
+
+1. The genre is updated from Spotify first, so recently added songs are included.
+2. A new private Spotify playlist `DJM · house_ukg-garage_speed-garage` is created with
+   the selected songs.
+3. A new private Spotify playlist `DJM · house_ukg-garage` is created with the remaining
+   songs. **The previous playlist is not changed or deleted.** DJ Manager never deletes
+   Spotify playlists.
+4. Both genres are linked to their new playlists.
+5. Files in the genre's folder move into the new sub folder
+   (`house/ukg-garage/speed-garage/`), and the Traktor collection follows the moves.
+   Songs that are stored in another genre's folder stay there, and their other genres are
+   not affected. Songs without a Spotify id move along as `LOCAL`.
+
+Creating Spotify playlists is also available for genres without a link
+(**+ SPOTIFY PLAYLIST**, with all songs of the genre) and in *Add playlist* (a new, empty
+Spotify playlist). The name prefix can be changed in Settings.
+
+### Connect your Spotify account
+
+Spotify only allows creating playlists through your own Spotify app. Since February 2026
+such apps run in Development Mode, the app owner needs **Spotify Premium**, and an app can
+have up to 5 users.
+
+1. Open [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) and
+   create an app. Add the redirect URI `http://127.0.0.1:9900/` and select **Web API**.
+2. Copy the app's **Client ID** into Settings → Spotify → Client ID. A client secret is
+   not needed for this (DJ Manager logs in with PKCE).
+3. Press **CONNECT SPOTIFY ACCOUNT** and log in in the browser window that opens.
+
+Playlists of the connected account are then read through the official Web API, which also
+works for private playlists. Other people's playlists are still read with spotdl.
 
 ## Screenshots
 
@@ -174,5 +213,5 @@ with `SHA256SUMS.txt` as a release. Installed copies pick the release up on thei
 
 Layout: `djmanager/` contains `genres` (naming), `library` (model and persistence), `scanner`
 (initial import), `audio` (tags), `spotdl_client`, `deps` (managed environment), `traktor`
-(NML), `backup`, `updater` (self-update), `service` (operations as background jobs), `api` (FastAPI)
+(NML), `backup`, `spotify_api` (Web API, PKCE login), `procs` (stoppable child processes), `updater` (self-update), `service` (operations as background jobs), `api` (FastAPI)
 and `static/` (UI). `packaging/` holds the build script, PyInstaller launcher, icon and installer.
