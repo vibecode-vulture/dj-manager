@@ -82,6 +82,14 @@ class RemoteSong:
         )
 
 
+def unique_songs(data: list[dict]) -> list[RemoteSong]:
+    """Songs of a playlist in order; a song listed twice is kept once."""
+    unique: dict[str, RemoteSong] = {}
+    for song in (RemoteSong.from_dict(d) for d in data if d.get("song_id")):
+        unique.setdefault(song.spotify_id, song)
+    return list(unique.values())
+
+
 class SpotdlClient:
     def __init__(self, deps: DependencyManager, settings: Settings) -> None:
         self.deps = deps
@@ -149,12 +157,7 @@ class SpotdlClient:
             data = json.loads(save_file.read_text(encoding="utf-8"))
         finally:
             save_file.unlink(missing_ok=True)
-        songs = [RemoteSong.from_dict(d) for d in data if d.get("song_id")]
-        # spotdl may list a song twice if it appears twice in the playlist
-        unique: dict[str, RemoteSong] = {}
-        for song in songs:
-            unique.setdefault(song.spotify_id, song)
-        return list(unique.values())
+        return unique_songs(data)
 
     def _fetch_fast(self, url: str, save_file: Path, log) -> bool:
         """List the playlist only (no per-song refetch). False = not supported by this spotdl."""

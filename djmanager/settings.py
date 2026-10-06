@@ -29,6 +29,8 @@ class Settings:
     # Use OAuth user login (needed for private playlists)
     spotify_user_auth: bool = False
     spotify_user_name: str = ""
+    # Name of playlists DJ Manager creates on Spotify: prefix + genre key
+    spotify_playlist_prefix: str = "DJM · "
 
     audio_format: str = "mp3"  # mp3 | m4a
     bitrate: str = "320k"  # e.g. 320k, 256k, auto, disable
@@ -81,7 +83,9 @@ class SettingsStore:
             elif isinstance(current, int):
                 value = int(value)
             elif isinstance(current, str):
-                value = "" if value is None else str(value).strip()
+                value = "" if value is None else str(value)
+                if key != "spotify_playlist_prefix":
+                    value = value.strip()
             setattr(self.settings, key, value)
         self.save()
         return self.settings

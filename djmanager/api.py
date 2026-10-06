@@ -17,6 +17,7 @@ from .jobs import Job
 from .library import SOURCE_LOCAL, Library, Track
 from .service import Service, ServiceError
 from .traktor import TraktorError, find_collections, traktor_running
+from .spotify_api import SpotifyAPIError
 from .updater import UpdateError
 
 STATIC = Path(__file__).parent / "static"
@@ -52,6 +53,7 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.exception_handler(TraktorError)
     @app.exception_handler(DependencyError)
     @app.exception_handler(UpdateError)
+    @app.exception_handler(SpotifyAPIError)
     async def handle_error(_: Request, exc: Exception):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
@@ -71,6 +73,7 @@ def create_app(service: Service | None = None) -> FastAPI:
             "version": __version__,
             "install_mode": paths.install_mode(),
             "update": svc.updater.last.to_dict() if svc.updater.last else None,
+            "spotify": svc.spotify.status(),
             "settings": svc.settings.public(),
             "library_loaded": library is not None,
             "nml_path": str(nml) if nml else None,
@@ -196,7 +199,16 @@ def create_app(service: Service | None = None) -> FastAPI:
     # ------------------------------------------------------------------ mutations
     @app.post("/api/playlists")
     def add_playlist(data: dict = Body(...)):
-        return job_ref(svc.submit_add_playlist(data.get("name", ""), data.get("url", "")))
+        return job_ref(svc.submit_add_playlist(data.get("name", ""), data.get("url", ""),
+                                               bool(data.get("create_on_spotify"))))
+
+    @app.post("/api/playlists/{key}/split")
+    def split(key: str, data: dict = Body(...)):
+        return job_ref(svc.submit_split(key, list(data.get("track_ids", [])), data.get("name", "")))
+
+    @app.post("/api/playlists/{key}/create-spotify")
+    def create_spotify(key: str):
+        return job_ref(svc.submit_create_spotify_playlist(key))
 
     @app.put("/api/playlists/{key}/link")
     def edit_link(key: str, data: dict = Body(...)):
@@ -266,6 +278,15 @@ def create_app(service: Service | None = None) -> FastAPI:
     def deps_action(data: dict = Body(...)):
         return job_ref(svc.submit_deps(data.get("action", ""), data.get("package") or None,
                                        data.get("version") or None, data.get("snapshot_id")))
+
+    @app.post("/api/spotify/connect")
+    def spotify_connect():
+        return job_ref(svc.submit_spotify_connect())
+
+    @app.post("/api/spotify/disconnect")
+    def spotify_disconnect():
+        svc.spotify.disconnect()
+        return svc.spotify.status()
 
     @app.post("/api/spotify/login")
     def spotify_login():

@@ -14,7 +14,8 @@ from .procs import kill_all
 from .library import REMOVED_FOLDER, SOURCE_LOCAL, SOURCE_SPOTIFY, Library, Playlist, Track
 from .scanner import scan
 from .settings import SettingsStore
-from .spotdl_client import RemoteSong, SpotdlClient
+from .spotdl_client import RemoteSong, SpotdlClient, unique_songs
+from .spotify_api import SpotifyAPI, SpotifyAPIError, playlist_id
 from .updater import Updater
 from .traktor import Collection, PlaylistNode, TrackMeta, TraktorError, find_collections, mapper_for, traktor_running
 from .util import is_spotify_playlist_url, move_file, now_iso, safe_filename
@@ -26,11 +27,13 @@ class ServiceError(RuntimeError):
 
 class Service:
     def __init__(self, settings: SettingsStore | None = None, deps: DependencyManager | None = None,
-                 backups: BackupManager | None = None, spotdl: SpotdlClient | None = None) -> None:
+                 backups: BackupManager | None = None, spotdl: SpotdlClient | None = None,
+                 spotify: SpotifyAPI | None = None) -> None:
         self.settings_store = settings or SettingsStore()
         self.deps = deps or DependencyManager()
         self.backups = backups or BackupManager()
         self.spotdl = spotdl or SpotdlClient(self.deps, self.settings_store.settings)
+        self.spotify = spotify or SpotifyAPI(self.settings_store.settings)
         self.jobs = JobRunner()
         self.updater = Updater(self.settings_store.settings)
         self.library: Library | None = None
@@ -152,7 +155,7 @@ class Service:
             return f"{pl.key}: no Spotify link"
         job.write(f"--- {pl.key}: fetching {pl.spotify_url}")
         try:
-            songs = self.spotdl.fetch_playlist(pl.spotify_url, job.write)
+            songs = self._fetch(job, pl)
         except JobCancelled:
             raise
         except Exception as exc:
@@ -238,6 +241,35 @@ class Service:
             return f"{pl.key}: {added} downloaded, {len(failed)} left for the next update"
         return f"{pl.key}: {added} downloaded, {len(removed)} removed, {len(failed)} failed"
 
+    def _fetch(self, job: Job, pl: Playlist) -> list[RemoteSong]:
+        """Own playlists through the Web API (private ones too), all others through spotdl."""
+        pid = playlist_id(pl.spotify_url)
+        if pid and self.spotify.connected:
+            try:
+                if not pl.spotify_owner:
+                    pl.spotify_owner = self.spotify.owner_of(pid)
+                if pl.spotify_owner == self.spotify.account.user_id:
+                    songs = unique_songs(self.spotify.playlist_tracks(pid))
+                    job.write(f"Found {len(songs)} songs (read from your Spotify account)")
+                    return songs
+            except SpotifyAPIError as exc:
+                job.write(f"Spotify API not usable for this playlist ({exc}) - using spotdl")
+        return self.spotdl.fetch_playlist(pl.spotify_url, job.write)
+
+    def _spotify_name(self, key: str) -> str:
+        return f"{self.settings.spotify_playlist_prefix}{key}"
+
+    def _create_spotify_playlist(self, job: Job, key: str, track_ids: list[str]) -> str:
+        """Create a private playlist for a genre with the given tracks; returns its URL."""
+        lib = self.require_library()
+        sids = [lib.tracks[t].spotify_id for t in track_ids if t in lib.tracks and lib.tracks[t].spotify_id]
+        created = self.spotify.create_playlist(self._spotify_name(key), f"Genre {key} - managed by DJ Manager")
+        job.write(f"Created Spotify playlist '{self._spotify_name(key)}': {created['url']}")
+        self.spotify.add_tracks(created["id"], sids)
+        job.write(f"  added {len(sids)} songs" + (f" ({len(track_ids) - len(sids)} local songs have no Spotify id)"
+                                                  if len(sids) < len(track_ids) else ""))
+        return created["url"]
+
     def submit_update_all(self) -> Job:
         def run(job: Job) -> str:
             lib = self.require_library()
@@ -290,17 +322,23 @@ class Service:
             raise ServiceError(f"Playlist '{key}' not found")
         return pl
 
-    def submit_add_playlist(self, name: str, url: str) -> Job:
+    def submit_add_playlist(self, name: str, url: str, create_on_spotify: bool = False) -> Job:
         lib = self.require_library()
         key = genres.normalize_key(name)
         if lib.find_playlist(key):
             raise ServiceError(f"A playlist '{key}' already exists")
         if url and not is_spotify_playlist_url(url):
             raise ServiceError("That does not look like a Spotify playlist link")
+        if create_on_spotify:
+            self.spotify.require()
 
         def run(job: Job) -> str:
+            link, owner = url.strip(), ""
+            if create_on_spotify:
+                link = self._create_spotify_playlist(job, key, [])
+                owner = self.spotify.account.user_id
             with lib.lock:
-                pl = Playlist(key=key, folder=lib.folder_for_key(key), spotify_url=url.strip())
+                pl = Playlist(key=key, folder=lib.folder_for_key(key), spotify_url=link, spotify_owner=owner)
                 lib.playlists[key] = pl
                 lib.abs_path(pl.folder).mkdir(parents=True, exist_ok=True)
                 lib.save()
@@ -452,6 +490,103 @@ class Service:
                 return f"Current dependency versions marked as {action}"
             raise ServiceError(f"Unknown action {action}")
         return self.jobs.submit(f"Dependencies: {action}", run)
+
+    def submit_create_spotify_playlist(self, key: str) -> Job:
+        """Give a genre without link (e.g. an imported folder) its own Spotify playlist."""
+        pl = self._playlist(key)
+        if pl.spotify_url:
+            raise ServiceError(f"{key} already has a Spotify playlist")
+        self.spotify.require()
+
+        def run(job: Job) -> str:
+            lib = self.require_library()
+            url = self._create_spotify_playlist(job, pl.key, list(pl.members))
+            with lib.lock:
+                pl.spotify_url, pl.spotify_owner = url, self.spotify.account.user_id
+                for tid in pl.members:
+                    if lib.tracks.get(tid) and lib.tracks[tid].spotify_id:
+                        pl.members[tid] = SOURCE_SPOTIFY
+                pl.last_synced = now_iso()
+                lib.save()
+            return f"{pl.key} is now linked to {url}"
+        return self.jobs.submit(f"Create Spotify playlist for {key}", run)
+
+    def submit_split(self, key: str, track_ids: list[str], sub_name: str) -> Job:
+        """Move selected songs of a genre into a new sub genre.
+
+        On Spotify two new playlists are created - one for the sub genre with the selected
+        songs and one for the genre with the remaining songs. The previous playlist is left
+        untouched (DJ Manager never deletes playlists). Files that live in the genre's folder
+        move into the sub genre's folder; songs stored elsewhere stay where they are.
+        """
+        lib = self.require_library()
+        pl = self._playlist(key)
+        part = genres.normalize_part(sub_name)
+        sub_key = genres.normalize_key(f"{pl.key}{genres.SEPARATOR}{part}") if part else ""
+        if not sub_key:
+            raise ServiceError("Enter a name for the new sub genre")
+        if lib.find_playlist(sub_key):
+            raise ServiceError(f"The genre '{sub_key}' already exists")
+        selected = [t for t in track_ids if t in pl.members]
+        if not selected:
+            raise ServiceError("Select the songs for the new sub genre first")
+        self.spotify.require()  # fail before anything changes
+
+        def run(job: Job) -> str:
+            if pl.spotify_url:
+                job.write(f"Updating {pl.key} from Spotify first ...")
+                self.sync_playlist(job, pl)
+            job.check_cancelled()
+            chosen = set(selected)
+            moving = [t for t in pl.members if t in chosen]  # keeps playlist order
+            staying = [t for t in pl.members if t not in chosen]
+            gone = len(chosen) - len(moving)
+            if gone:
+                job.write(f"{gone} selected songs are no longer in {pl.key} on Spotify and are skipped")
+            if not moving:
+                raise ServiceError("None of the selected songs is in the playlist anymore")
+
+            # From here on nothing is cancelled half-way: Spotify and the library stay consistent.
+            sub_url = self._create_spotify_playlist(job, sub_key, moving)
+            new_url = self._create_spotify_playlist(job, pl.key, staying)
+            owner = self.spotify.account.user_id
+            moved_files = 0
+            with lib.lock:
+                sources = dict(pl.members)
+                sub = Playlist(key=sub_key, folder=lib.folder_for_key(sub_key), spotify_url=sub_url,
+                               spotify_owner=owner, last_synced=now_iso())
+                for tid in moving:
+                    track = lib.tracks[tid]
+                    sub.members[tid] = SOURCE_SPOTIFY if track.spotify_id else sources[tid]
+                pl.members = {tid: (SOURCE_SPOTIFY if lib.tracks[tid].spotify_id else sources[tid]) for tid in staying}
+                previous = pl.spotify_url
+                pl.spotify_url, pl.spotify_owner, pl.last_synced = new_url, owner, now_iso()
+                lib.playlists[sub_key] = sub
+                sub_dir = lib.abs_path(sub.folder)
+                sub_dir.mkdir(parents=True, exist_ok=True)
+                folder = pl.folder.lower()
+                for tid in moving:
+                    track = lib.tracks[tid]
+                    src = lib.abs_path(track.path)
+                    if PurePosixPath(track.path).parent.as_posix().lower() != folder or not src.exists():
+                        continue  # stored in another genre's folder - stays there
+                    new_rel = lib.rel(move_file(src, sub_dir))
+                    lib.record_move(track.path, new_rel)
+                    track.path = new_rel
+                    moved_files += 1
+                lib.reindex()
+                lib.save()
+            job.write(f"Previous playlist of {pl.key} is unchanged on Spotify: {previous or '(none)'}")
+            job.write(f"{moved_files} files moved to {sub.folder}/")
+            self.write_traktor(job, f"splitting {pl.key}")
+            return f"{sub_key} created with {len(moving)} songs, {len(staying)} stay in {pl.key}"
+        return self.jobs.submit(f"Split {key}", run)
+
+    def submit_spotify_connect(self) -> Job:
+        def run(job: Job) -> str:
+            name = self.spotify.login(job.write)
+            return f"Spotify account connected: {name}"
+        return self.jobs.submit("Connect Spotify account", run, dedupe=True)
 
     def submit_login(self) -> Job:
         def run(job: Job) -> str:

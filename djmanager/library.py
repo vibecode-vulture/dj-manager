@@ -55,6 +55,9 @@ class Playlist:
     key: str
     folder: str  # relative to the music folder, posix separators
     spotify_url: str = ""
+    # Spotify user id of the playlist owner, once known. Playlists of the connected
+    # account are read through the Web API (works for private ones, spotdl does not).
+    spotify_owner: str = ""
     created_at: str = field(default_factory=now_iso)
     last_synced: str = ""
     last_error: str = ""
