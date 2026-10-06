@@ -20,6 +20,7 @@ from . import paths
 from .deps import DependencyManager, child_env
 from .jobs import JobCancelled, current_job
 from .procs import kill_tree, release, spawn
+from .util import download
 
 PITCHES = {"C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4, "F": 5, "F#": 6, "Gb": 6,
            "G": 7, "G#": 8, "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11}
@@ -345,8 +346,6 @@ class Analyzer:
         return engine
 
     def ensure_style_tools(self, log) -> None:
-        import urllib.request
-
         if not self.deps.installed_versions().get("onnxruntime"):
             log("Installing onnxruntime for the style model ...")
             self.deps.install_packages(["onnxruntime"], log)
@@ -356,9 +355,7 @@ class Analyzer:
             if target.exists():
                 continue
             log(f"Downloading the style model {name} (Discogs-EffNet by MTG, CC BY-NC-ND 4.0) ...")
-            tmp = target.with_suffix(target.suffix + ".part")
-            urllib.request.urlretrieve(STYLE_MODEL_URL + name, tmp)
-            os.replace(tmp, target)
+            download(STYLE_MODEL_URL + name, target)
 
     def worker_command(self) -> list[str]:
         ffmpeg = self.deps.ffmpeg_path()

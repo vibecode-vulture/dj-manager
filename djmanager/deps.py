@@ -14,7 +14,6 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -23,7 +22,7 @@ from packaging.version import InvalidVersion, Version
 from . import paths
 from .jobs import JobCancelled, current_job
 from .procs import release, spawn
-from .util import atomic_write_text, now_iso
+from .util import atomic_write_text, download, now_iso, urlopen
 
 MANAGED_PACKAGES = ["spotdl", "yt-dlp"]
 # Installed on demand for BPM/key analysis (see analysis.py)
@@ -148,7 +147,7 @@ class DependencyManager:
             self._run([base_python, "-m", "venv", "--without-pip", str(self.venv)], log)
             get_pip = self.base / "get-pip.py"
             log("Downloading get-pip.py")
-            urllib.request.urlretrieve(GET_PIP_URL, get_pip)
+            download(GET_PIP_URL, get_pip)
             self._run([str(self.python), str(get_pip), "-q"], log)
         self._run([str(self.python), "-m", "pip", "install", "-q", "--upgrade", "pip"], log)
 
@@ -167,7 +166,7 @@ class DependencyManager:
         url = PYTHON_RUNTIME_URL.format(target="x86_64-pc-windows-msvc" if paths.IS_WINDOWS else "x86_64-unknown-linux-gnu")
         archive = self.base / "python-runtime.tar.gz"
         log(f"Downloading Python runtime {PYTHON_RUNTIME_VERSION} ...")
-        urllib.request.urlretrieve(url, archive)
+        download(url, archive, timeout=600)
         shutil.rmtree(runtime, ignore_errors=True)
         with tarfile.open(archive) as tar:  # contains a top-level "python/" folder
             try:
@@ -206,7 +205,7 @@ class DependencyManager:
 
     @staticmethod
     def available_versions(package: str, limit: int = 30) -> list[str]:
-        with urllib.request.urlopen(f"https://pypi.org/pypi/{package}/json", timeout=20) as resp:
+        with urlopen(f"https://pypi.org/pypi/{package}/json", timeout=20) as resp:
             data = json.load(resp)
         versions = []
         for v, files in data.get("releases", {}).items():

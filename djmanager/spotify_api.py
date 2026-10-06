@@ -27,7 +27,7 @@ from typing import Callable
 
 from . import paths
 from .jobs import JobCancelled, current_job
-from .util import atomic_write_text
+from .util import atomic_write_text, urlopen
 
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -75,7 +75,7 @@ Transport = Callable[[str, str, dict, bytes | None], tuple[int, dict, bytes]]
 def urllib_transport(method: str, url: str, headers: dict, body: bytes | None) -> tuple[int, dict, bytes]:
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urlopen(req, timeout=30) as resp:
             return resp.status, dict(resp.headers), resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, dict(exc.headers or {}), exc.read()

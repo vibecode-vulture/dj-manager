@@ -29,6 +29,7 @@ from packaging.version import InvalidVersion, Version
 
 from . import __version__, paths
 from .deps import child_env
+from .util import urlopen
 
 try:  # written by the release build, see packaging/build.py
     from ._build_info import UPDATE_REPO as BUILD_UPDATE_REPO
@@ -65,7 +66,7 @@ class UpdateInfo:
 
 def _get_json(url: str) -> dict:
     req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "dj-manager"})
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with urlopen(req, timeout=20) as resp:
         return json.load(resp)
 
 
@@ -126,13 +127,13 @@ class Updater:
         log(f"Downloading {info.asset_name} ...")
         req = urllib.request.Request(info.asset_url, headers={"User-Agent": "dj-manager"})
         digest = hashlib.sha256()
-        with urllib.request.urlopen(req, timeout=60) as resp, open(target, "wb") as out:
+        with urlopen(req, timeout=60) as resp, open(target, "wb") as out:
             while chunk := resp.read(1 << 20):
                 digest.update(chunk)
                 out.write(chunk)
         sums_url = self._sums_url
         if sums_url:
-            with urllib.request.urlopen(urllib.request.Request(sums_url, headers={"User-Agent": "dj-manager"}), timeout=20) as resp:
+            with urlopen(urllib.request.Request(sums_url, headers={"User-Agent": "dj-manager"}), timeout=20) as resp:
                 sums = resp.read().decode("utf-8", "replace")
             expected = next((line.split()[0] for line in sums.splitlines()
                              if line.strip().endswith(info.asset_name)), None)

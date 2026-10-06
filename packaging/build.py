@@ -44,6 +44,7 @@ def pyinstaller(name: str, onefile: bool, workdir: Path, distdir: Path) -> None:
         "--paths", str(ROOT),
         # uvicorn picks loops/protocols dynamically
         "--collect-submodules", "uvicorn",
+        "--collect-data", "certifi",  # CA bundle for HTTPS, see util.ssl_context
         "--hidden-import", "djmanager._build_info",
         "--onefile" if onefile else "--onedir",
     ]

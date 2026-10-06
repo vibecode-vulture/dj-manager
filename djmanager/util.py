@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import ssl
 import tempfile
 import unicodedata
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -80,3 +82,41 @@ def is_spotify_playlist_url(url: str) -> bool:
         re.search(r"open\.spotify\.com/(?:intl-[a-z]+/)?(playlist|album)/[A-Za-z0-9]+", url or "")
         or re.fullmatch(r"spotify:(playlist|album):[A-Za-z0-9]+", (url or "").strip())
     )
+
+
+_SSL: ssl.SSLContext | None = None
+
+
+def ssl_context() -> ssl.SSLContext:
+    """System certificates plus the bundled certifi ones.
+
+    Packaged builds cannot rely on the system alone: Python on Windows only knows the
+    roots already in the Windows store, and a Linux binary looks for the CA bundle where
+    the build machine kept it. certifi makes HTTPS work everywhere; the system store keeps
+    e.g. company proxy certificates working.
+    """
+    global _SSL
+    if _SSL is None:
+        ctx = ssl.create_default_context()
+        try:
+            import certifi
+
+            ctx.load_verify_locations(certifi.where())
+        except (ImportError, OSError):
+            pass
+        _SSL = ctx
+    return _SSL
+
+
+def urlopen(url_or_request, timeout: float = 30):
+    return urllib.request.urlopen(url_or_request, timeout=timeout, context=ssl_context())
+
+
+def download(url: str, target, timeout: float = 120) -> None:
+    """Download to target (via a temporary file, so an interrupted download leaves nothing)."""
+    target = Path(target)
+    tmp = target.with_name(target.name + ".part")
+    req = urllib.request.Request(url, headers={"User-Agent": "dj-manager"})
+    with urlopen(req, timeout=timeout) as resp, open(tmp, "wb") as out:
+        shutil.copyfileobj(resp, out, 1 << 20)
+    os.replace(tmp, target)

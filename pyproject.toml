@@ -12,6 +12,7 @@ dependencies = [
     "uvicorn>=0.27",
     "mutagen>=1.47",
     "packaging>=23",
+    "certifi>=2024.2",
 ]
 
 [project.optional-dependencies]
