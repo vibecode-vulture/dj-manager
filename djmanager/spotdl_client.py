@@ -101,10 +101,10 @@ class SpotdlClient:
         if not self.deps.is_installed() or not self.deps.installed_versions().get("spotdl"):
             raise SpotdlError("spotdl is not installed - open Dependencies and install it")
 
-    def _stream(self, cmd: list[str], log, on_line=None) -> tuple[int, list[str]]:
+    def _stream(self, cmd: list[str], log, on_line=None, cwd: Path | None = None) -> tuple[int, list[str]]:
         """Run a stoppable child process and forward its output line by line."""
         proc = spawn(
-            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
             env=child_env(PYTHONIOENCODING="utf-8", TERM="dumb", COLUMNS="400"),
         )
@@ -126,11 +126,11 @@ class SpotdlClient:
             raise JobCancelled()
         return code, lines
 
-    def _run(self, args: list[str], log, on_line=None) -> str:
+    def _run(self, args: list[str], log, on_line=None, cwd: Path | None = None) -> str:
         self._require()
         shown = " ".join(a if a != self.settings.spotify_client_secret else "***" for a in args)
         log(f"$ spotdl {shown}")
-        code, lines = self._stream([str(self.deps.python), "-m", "spotdl", *args], log, on_line)
+        code, lines = self._stream([str(self.deps.python), "-m", "spotdl", *args], log, on_line, cwd)
         if code != 0:
             raise SpotdlError(f"spotdl failed (exit {code}): " + " | ".join(lines[-5:]))
         return "\n".join(lines)
@@ -173,8 +173,11 @@ class SpotdlClient:
         save_file.write_text(json.dumps([s.raw for s in songs], ensure_ascii=False), encoding="utf-8")
         s = self.settings
         args = [
-            "download", str(save_file),
-            "--output", str(staging / "{track-id}.{output-ext}"),
+            # Paths relative to the staging folder (cwd): spotdl sanitises every part of the
+            # output path and drops leading dots, so ".../.local/share/..." became
+            # ".../local/share/..." and the downloads ended up outside the staging folder.
+            "download", save_file.name,
+            "--output", "{track-id}.{output-ext}",
             "--format", s.audio_format or "mp3",
             "--threads", str(max(1, s.download_threads)),
             "--overwrite", "skip",
@@ -195,7 +198,7 @@ class SpotdlClient:
 
         cancelled = False
         try:
-            self._run(args, log, progress)
+            self._run(args, log, progress, cwd=staging)
         except JobCancelled:
             cancelled = True  # keep the songs that finished before Stop
         except SpotdlError as exc:

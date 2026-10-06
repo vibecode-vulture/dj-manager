@@ -59,3 +59,35 @@ def test_fetch_playlist(home, tmp_path, monkeypatch, fast):
     assert [s.title for s in songs] == ["Track A", "Track B"]  # duplicate removed
     assert songs[1].duration == 300 and songs[0].spotify_id == "a" * 22
     assert any("saved via cli" in line for line in lines) is (not fast)
+
+
+def test_download_lands_in_staging_even_below_dot_folders(tmp_path, monkeypatch):
+    """Regression: spotdl drops leading dots of output path parts (~/.local -> ~/local)."""
+    from djmanager import spotdl_client
+    from djmanager.spotdl_client import RemoteSong
+
+    home = tmp_path / ".local" / "share"  # like the real data dir
+    monkeypatch.setenv("DJMANAGER_HOME", str(home))
+    stub = tmp_path / "stub" / "spotdl"
+    stub.mkdir(parents=True)
+    (stub / "__init__.py").write_text("")
+    (stub / "__main__.py").write_text(textwrap.dedent(r"""
+        import json, os, sys
+        args = sys.argv[1:]
+        out = args[args.index("--output") + 1]
+        songs = json.load(open(args[1]))
+        for song in songs:
+            path = out.replace("{track-id}", song["song_id"]).replace("{output-ext}", "mp3")
+            # what spotdl does: sanitise every path part, which drops leading dots
+            parts = path.split(os.sep)
+            path = os.sep.join(p.lstrip(".") if p not in ("", ".", "..") else p for p in parts)
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            open(path, "wb").write(b"x")
+            print(f'Downloaded "{song["name"]}"')
+    """))
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "stub"))
+    monkeypatch.setattr(spotdl_client.SpotdlClient, "_complete", staticmethod(lambda f, s: True))
+    song = RemoteSong.from_dict(SONGS[0])
+    files = SpotdlClient(Deps(), Settings()).download([song], lambda line: None)
+    assert set(files) == {song.spotify_id}
+    assert ".local" in str(files[song.spotify_id])  # inside the real staging folder
