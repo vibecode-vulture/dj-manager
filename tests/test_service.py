@@ -1,50 +1,5 @@
-import xml.etree.ElementTree as ET
-
-import pytest
-
-from conftest import FakeSpotdl, song, wait
-from djmanager.backup import BackupManager
-from djmanager.deps import DependencyManager
+from conftest import URL_A, URL_B, song, traktor_playlists, wait
 from djmanager.library import SOURCE_LOCAL, SOURCE_SPOTIFY
-from djmanager.service import Service
-from djmanager.settings import SettingsStore
-
-URL_A = "https://open.spotify.com/playlist/AAAA"
-URL_B = "https://open.spotify.com/playlist/BBBB"
-
-
-class NoDeps(DependencyManager):
-    def mark_current(self, status):
-        pass
-
-
-@pytest.fixture
-def env(home, wine, tmp_path):
-    prefix, nml = wine
-    music = tmp_path / "music"
-    (music / "techno" / "acid").mkdir(parents=True)
-    (music / "House Music").mkdir(parents=True)
-    (music / "techno" / "acid" / "Phuture - Acid Tracks.mp3").write_bytes(b"x")
-    (music / "techno" / "Surgeon - Klonk.mp3").write_bytes(b"x")
-    (music / "House Music" / "Phuture - Acid Tracks.mp3").write_bytes(b"x")  # duplicate copy
-
-    settings = SettingsStore()
-    settings.update({"traktor_nml": str(nml), "traktor_path_mode": "wine", "wine_prefix": str(prefix)})
-    fake = FakeSpotdl(tmp_path / "staging")
-    svc = Service(settings=settings, deps=NoDeps(), backups=BackupManager(tmp_path / "backups"), spotdl=fake)
-    wait(svc.set_music_folder(str(music)))
-    return svc, fake, music, nml
-
-
-def traktor_playlists(nml):
-    root = ET.parse(nml).getroot()
-    managed = [n for n in root.find("PLAYLISTS/NODE/SUBNODES") if n.get("NAME") == "DJ Manager"][0]
-    result = {}
-    for node in managed.iter("NODE"):
-        if node.get("TYPE") == "PLAYLIST":
-            result[node.get("NAME")] = [pk.get("KEY") for pk in node.iter("PRIMARYKEY")]
-    return result
-
 
 def test_initial_import(env):
     svc, fake, music, nml = env

@@ -1,8 +1,13 @@
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
 
+from djmanager.backup import BackupManager
+from djmanager.deps import DependencyManager
+from djmanager.service import Service
+from djmanager.settings import SettingsStore
 from djmanager.spotdl_client import RemoteSong
 
 
@@ -19,7 +24,11 @@ class FakeSpotdl:
     def __init__(self, staging: Path) -> None:
         self.playlists: dict[str, list[RemoteSong]] = {}
         self.downloaded: list[str] = []
-        self.fail: set[str] = set()
+        self.fail: set[str] = set()          # technical error on every attempt
+        self.unavailable: set[str] = set()   # "not found on YouTube"
+        self.flaky: dict[str, int] = {}      # spotify id -> attempts that fail before it works
+        self.attempts: dict[str, int] = {}
+        self.last_unavailable: dict[str, str] = {}
         self.staging = staging
 
     def fetch_playlist(self, url, log=print):
@@ -29,8 +38,15 @@ class FakeSpotdl:
         folder = self.staging / f"staging-{len(self.downloaded)}"
         folder.mkdir(parents=True, exist_ok=True)
         out = {}
+        self.last_unavailable = {}
         for s in songs:
+            self.attempts[s.spotify_id] = self.attempts.get(s.spotify_id, 0) + 1
+            if s.spotify_id in self.unavailable:
+                self.last_unavailable[s.spotify_id] = "not found on YouTube"
+                continue
             if s.spotify_id in self.fail:
+                continue
+            if self.flaky.get(s.spotify_id, 0) >= self.attempts[s.spotify_id]:
                 continue
             f = folder / f"{s.spotify_id}.mp3"
             f.write_bytes(b"fake")
@@ -134,3 +150,43 @@ def connected_api(settings, server):
     api = SpotifyAPI(settings, transport=server.transport)
     api.account.client_id, api.account.refresh_token, api.account.user_id = "client", "refresh", server.user
     return api
+
+
+# ---------------------------------------------------------------- shared service fixture
+URL_A = "https://open.spotify.com/playlist/AAAA"
+URL_B = "https://open.spotify.com/playlist/BBBB"
+
+
+class NoDeps(DependencyManager):
+    def mark_current(self, status):
+        pass
+
+
+@pytest.fixture
+def env(home, wine, tmp_path):
+    prefix, nml = wine
+    music = tmp_path / "music"
+    (music / "techno" / "acid").mkdir(parents=True)
+    (music / "House Music").mkdir(parents=True)
+    (music / "techno" / "acid" / "Phuture - Acid Tracks.mp3").write_bytes(b"x")
+    (music / "techno" / "Surgeon - Klonk.mp3").write_bytes(b"x")
+    (music / "House Music" / "Phuture - Acid Tracks.mp3").write_bytes(b"x")  # duplicate copy
+
+    settings = SettingsStore()
+    settings.update({"traktor_nml": str(nml), "traktor_path_mode": "wine", "wine_prefix": str(prefix)})
+    fake = FakeSpotdl(tmp_path / "staging")
+    svc = Service(settings=settings, deps=NoDeps(), backups=BackupManager(tmp_path / "backups"), spotdl=fake)
+    wait(svc.set_music_folder(str(music)))
+    return svc, fake, music, nml
+
+
+def traktor_playlists(nml):
+    root = ET.parse(nml).getroot()
+    managed = [n for n in root.find("PLAYLISTS/NODE/SUBNODES") if n.get("NAME") == "DJ Manager"][0]
+    result = {}
+    for node in managed.iter("NODE"):
+        if node.get("TYPE") == "PLAYLIST":
+            result[node.get("NAME")] = [pk.get("KEY") for pk in node.iter("PRIMARYKEY")]
+    return result
+
+

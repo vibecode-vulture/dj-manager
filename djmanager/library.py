@@ -44,6 +44,9 @@ class Track:
     added_at: str = field(default_factory=now_iso)
     # Additional copies of the same song found on disk (relative paths). Never touched.
     duplicates: list[str] = field(default_factory=list)
+    # Songs of a Spotify playlist that could not be downloaded have no file yet (path "").
+    download_status: str = ""          # "" ok, "failed" (retried), "unavailable" (not on YouTube)
+    download_error: str = ""
     rating: int | None = None          # 1-5 stars from the file's tags
     rating_traktor: int | None = None  # 1-5 stars from Traktor's collection (fallback)
     mtime: float = 0.0                 # file modification time when the tags were read
@@ -166,7 +169,8 @@ class Library:
         fk = fuzzy_key(track.artists, track.title)
         if fk:
             self._by_fuzzy.setdefault(fk, []).append(track.id)
-        self._by_path[track.path.lower()] = track.id
+        if track.path:
+            self._by_path[track.path.lower()] = track.id
 
     def add_track(self, track: Track) -> Track:
         self.tracks[track.id] = track
@@ -189,6 +193,16 @@ class Library:
 
     def abs_path(self, rel_path: str) -> Path:
         return self.root.joinpath(*PurePosixPath(rel_path).parts)
+
+    def file_of(self, track: Track) -> Path | None:
+        """The track's file, or None if it has none (not downloaded yet) or it is gone."""
+        if not track.path:
+            return None
+        path = self.abs_path(track.path)
+        return path if path.is_file() else None
+
+    def has_file(self, track: Track) -> bool:
+        return self.file_of(track) is not None
 
     def track_by_path(self, rel_path: str) -> Track | None:
         tid = self._by_path.get(rel_path.lower())
@@ -314,7 +328,7 @@ class Library:
             before = len(track.duplicates)
             track.duplicates = [d for d in track.duplicates if self.abs_path(d).exists()]
             removed += before - len(track.duplicates)
-            if track.id not in members and not self.abs_path(track.path).exists():
+            if track.id not in members and not self.has_file(track):
                 del self.tracks[track.id]
                 removed += 1
         if removed:

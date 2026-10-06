@@ -91,3 +91,15 @@ def test_download_lands_in_staging_even_below_dot_folders(tmp_path, monkeypatch)
     files = SpotdlClient(Deps(), Settings()).download([song], lambda line: None)
     assert set(files) == {song.spotify_id}
     assert ".local" in str(files[song.spotify_id])  # inside the real staging folder
+
+
+def test_not_found_messages_are_matched_to_songs():
+    from djmanager.spotdl_client import RemoteSong
+
+    songs = [RemoteSong.from_dict({**SONGS[0], "artists": ["Blura"], "name": "Exes - Speed Garage"}),
+             RemoteSong.from_dict({**SONGS[1], "artists": ["Phrva"], "name": "Is It All"})]
+    lines = ["Blura - Exes - Speed Garage: Searching for song",
+             "LookupError: No results found for song: Blura - Exes - Speed Garage",
+             "AudioProviderError: YT-DLP download error - https://music.youtube.com/watch?v=-g8PQ6o1NmI"]
+    found = SpotdlClient._not_found(songs, lines)
+    assert list(found) == [songs[0].spotify_id]  # the yt-dlp error is a technical failure, not "not found"

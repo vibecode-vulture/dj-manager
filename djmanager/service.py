@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import threading
 from pathlib import Path, PurePosixPath
 
@@ -20,7 +21,7 @@ from .spotdl_client import RemoteSong, SpotdlClient, unique_songs
 from .spotify_api import SpotifyAPI, SpotifyAPIError, playlist_id
 from .updater import Updater
 from .traktor import Collection, PlaylistNode, TrackMeta, TraktorError, find_collections, mapper_for, traktor_running
-from .util import is_spotify_playlist_url, move_file, now_iso, safe_filename
+from .util import AUDIO_EXTENSIONS, is_spotify_playlist_url, move_file, now_iso, safe_filename, unique_path
 
 
 class ServiceError(RuntimeError):
@@ -128,13 +129,14 @@ class Service:
                     moved += 1
             added = 0
             for track in lib.tracks.values():  # Traktor's ratings are the fallback for files without one
-                track.rating_traktor = popm_to_stars(collection.ranking(lib.abs_path(track.path)))
+                if track.path:
+                    track.rating_traktor = popm_to_stars(collection.ranking(lib.abs_path(track.path)))
             for tid in lib.member_ids():
                 track = lib.tracks.get(tid)
                 if not track:
                     continue
-                path = lib.abs_path(track.path)
-                if path.exists() and collection.ensure_entry(TrackMeta(path, track.title, track.artist_line, track.album, track.duration)):
+                path = lib.file_of(track)  # songs that are not downloaded yet stay out of Traktor
+                if path and collection.ensure_entry(TrackMeta(path, track.title, track.artist_line, track.album, track.duration)):
                     added += 1
             nodes = self._playlist_nodes(lib, None)
             count = collection.set_managed_tree(self.settings.traktor_root_folder, nodes)
@@ -150,8 +152,8 @@ class Service:
         for key in lib.genre_children(parent_key):
             paths = []
             for tid in lib.genre_track_ids(key):
-                path = lib.abs_path(lib.tracks[tid].path)
-                if path.exists():
+                path = lib.file_of(lib.tracks[tid])
+                if path:
                     paths.append(path)
             nodes.append(PlaylistNode(name=key, track_paths=paths, children=self._playlist_nodes(lib, key)))
         return nodes
@@ -160,7 +162,7 @@ class Service:
         return self.jobs.submit("Write Traktor collection", lambda job: self.write_traktor(job, "manual write"))
 
     # ------------------------------------------------------------------ spotify sync
-    def sync_playlist(self, job: Job, pl: Playlist) -> str:
+    def sync_playlist(self, job: Job, pl: Playlist, retry_unavailable: bool = False) -> str:
         lib = self.require_library()
         if not pl.spotify_url:
             return f"{pl.key}: no Spotify link"
@@ -178,7 +180,8 @@ class Service:
 
         matched: dict[str, str] = {}  # spotify id -> track id
         to_download: list[RemoteSong] = []
-        redownload: dict[str, Track] = {}
+        known: dict[str, Track] = {}  # tracks that exist but have no file yet
+        kept_unavailable = 0
         with lib.lock:
             for song in allowed:
                 track = lib.match(song.spotify_id, song.isrc, song.artists, song.title, song.duration)
@@ -186,34 +189,43 @@ class Service:
                     to_download.append(song)
                     continue
                 lib.link_spotify(track, song.spotify_id, song.isrc)
-                if not lib.abs_path(track.path).exists():
-                    redownload[song.spotify_id] = track
-                    to_download.append(song)
                 matched[song.spotify_id] = track.id
-        job.write(f"{len(songs)} songs on Spotify, {len(matched) - len(redownload)} already in the collection, "
-                  f"{len(to_download)} to download, {skipped} blacklisted")
+                if lib.has_file(track):
+                    continue
+                if track.download_status == "unavailable" and not retry_unavailable:
+                    kept_unavailable += 1  # not searched again on every update - use Retry
+                    continue
+                known[song.spotify_id] = track
+                to_download.append(song)
+        job.write(f"{len(songs)} songs on Spotify, {len(matched) - len(known) - kept_unavailable} already in the collection, "
+                  f"{len(to_download)} to download, {skipped} blacklisted"
+                  + (f", {kept_unavailable} not on YouTube (use Retry to search again)" if kept_unavailable else ""))
 
         folder = lib.abs_path(pl.folder)
         folder.mkdir(parents=True, exist_ok=True)
-        failed: list[RemoteSong] = []
-        if to_download:
-            files = self.spotdl.download(to_download, job.write)
+        failed: list[RemoteSong] = []      # technical errors (after all retries)
+        unavailable: dict[str, str] = {}  # not found on YouTube
+        pending, downloaded = list(to_download), 0
+        for attempt in range(1 + max(0, self.settings.download_retries)):
+            if not pending or job.cancel_requested:
+                break
+            if attempt:
+                job.write(f"Retrying {len(pending)} failed downloads (attempt {attempt + 1}) ...")
+            files = self.spotdl.download(pending, job.write)
+            not_found = dict(getattr(self.spotdl, "last_unavailable", {}) or {})
             try:
                 with lib.lock:
-                    for song in to_download:
+                    for song in pending:
                         src = files.get(song.spotify_id)
                         if src is None:
-                            failed.append(song)
                             continue
                         name = safe_filename(f"{', '.join(song.artists)} - {song.title}") + src.suffix.lower()
                         dst = move_file(src.rename(src.with_name(name)), folder)
                         rel = lib.rel(dst)
-                        if song.spotify_id in redownload:
-                            redownload[song.spotify_id].path = rel
-                            lib.reindex()
-                        else:
-                            # The playlist listing has no album/ISRC; spotdl tags the file with them.
-                            tags = read_info(dst)
+                        # The playlist listing has no album/ISRC; spotdl tags the file with them.
+                        tags = read_info(dst)
+                        track = known.get(song.spotify_id)
+                        if track is None:
                             track = lib.add_track(Track(
                                 id=lib.new_id(), path=rel, title=song.title, artists=song.artists,
                                 album=song.album or tags.album, duration=song.duration or tags.duration,
@@ -221,14 +233,42 @@ class Service:
                                 rating=tags.rating, mtime=dst.stat().st_mtime,
                             ))
                             matched[song.spotify_id] = track.id
+                        else:
+                            track.path, track.mtime = rel, dst.stat().st_mtime
+                            track.rating = track.rating if track.rating is not None else tags.rating
+                        track.download_status, track.download_error = "", ""
+                        lib.reindex()
+                        downloaded += 1
                         job.write(f"Downloaded: {rel}")
             finally:
                 self.spotdl.cleanup_staging(files)
+            missing = [s for s in pending if s.spotify_id not in files]
+            unavailable.update({s.spotify_id: not_found[s.spotify_id] for s in missing if s.spotify_id in not_found})
+            pending = [s for s in missing if s.spotify_id not in not_found]  # only technical errors are retried
+        failed = pending
+
+        with lib.lock:
+            # Songs without a file stay in the genre, marked, so they can be retried or linked to a file.
+            for song in failed + [s for s in to_download if s.spotify_id in unavailable]:
+                if job.cancel_requested and song.spotify_id not in unavailable:
+                    status, error = "failed", "stopped before it was downloaded"
+                elif song.spotify_id in unavailable:
+                    status, error = "unavailable", unavailable[song.spotify_id]
+                else:
+                    status, error = "failed", "download error (yt-dlp) - see the log; retried on the next update"
+                track = known.get(song.spotify_id) or (lib.tracks.get(matched[song.spotify_id]) if song.spotify_id in matched else None)
+                if track is None:
+                    track = lib.add_track(Track(
+                        id=lib.new_id(), path="", title=song.title, artists=song.artists, album=song.album,
+                        duration=song.duration, spotify_id=song.spotify_id, isrc=song.isrc))
+                    matched[song.spotify_id] = track.id
+                track.download_status, track.download_error = status, error
+            lib.reindex()
 
         with lib.lock:
             new_members: dict[str, str] = {}
             for song in allowed:
-                tid = matched.get(song.spotify_id)  # failed new downloads have no track
+                tid = matched.get(song.spotify_id)
                 if tid:
                     new_members.setdefault(tid, SOURCE_SPOTIFY)
             removed = [tid for tid, src in pl.members.items() if src == SOURCE_SPOTIFY and tid not in new_members]
@@ -243,15 +283,21 @@ class Service:
             if job.cancel_requested and failed:
                 pl.last_error = f"Stopped - {len(failed)} songs not downloaded yet"
             else:
-                pl.last_error = f"{len(failed)} songs could not be downloaded" if failed else ""
+                problems = [f"{len(failed)} download errors"] if failed else []
+                problems += [f"{len(unavailable)} not on YouTube"] if unavailable else []
+                pl.last_error = ", ".join(problems)
             if not job.cancel_requested:
                 for song in failed:
                     job.write(f"FAILED to download: {', '.join(song.artists)} - {song.title} ({song.url})")
+                for song in (s for s in to_download if s.spotify_id in unavailable):
+                    job.write(f"NOT ON YOUTUBE: {', '.join(song.artists)} - {song.title} ({song.url}) - "
+                              f"download it yourself and link the file")
             lib.save()
-        added = len(to_download) - len(failed)
+        added = downloaded
         if job.cancel_requested:
             return f"{pl.key}: {added} downloaded, {len(failed)} left for the next update"
-        return f"{pl.key}: {added} downloaded, {len(removed)} removed, {len(failed)} failed"
+        return (f"{pl.key}: {added} downloaded, {len(removed)} removed, {len(failed)} failed"
+                + (f", {len(unavailable)} not on YouTube" if unavailable else ""))
 
     def _fetch(self, job: Job, pl: Playlist) -> list[RemoteSong]:
         """Own playlists through the Web API (private ones too), all others through spotdl."""
@@ -343,7 +389,7 @@ class Service:
     # ------------------------------------------------------------------ analysis
     def _analysable(self, lib: Library) -> list[Track]:
         members = lib.member_ids()
-        return [t for t in lib.tracks.values() if t.id in members]
+        return [t for t in lib.tracks.values() if t.id in members and t.path]  # not: songs without file
 
     STATUS_FIELD = {"base": "analysis", "features": "features_status", "styles": "styles_status"}
 
@@ -429,8 +475,8 @@ class Service:
             todo = []
             for t in self._analysable(lib):
                 tasks = self._pending_tasks(t, wanted)
-                if tasks and lib.abs_path(t.path).exists():
-                    todo.append((t.id, str(lib.abs_path(t.path)), tasks, str(lib.vector_file(t.id))))
+                if tasks and lib.has_file(t):
+                    todo.append((t.id, str(lib.file_of(t)), tasks, str(lib.vector_file(t.id))))
         total, done, failed = len(todo), 0, 0
         if not total:
             return "All songs are analysed"
@@ -503,7 +549,7 @@ class Service:
         lib = self.require_library()
         pl = self._playlist(key)
         with lib.lock:
-            tracks = [lib.tracks[t] for t in pl.members if t in lib.tracks and lib.abs_path(lib.tracks[t].path).exists()]
+            tracks = [lib.tracks[t] for t in pl.members if t in lib.tracks and lib.has_file(lib.tracks[t])]
             payload_tracks = [{"id": t.id, "bpm": t.bpm, "energy": t.energy, "file": str(lib.vector_file(t.id))}
                               for t in tracks]
             coverage = {"songs": len(tracks), "bpm": sum(t.analysis == "done" for t in tracks),
@@ -697,6 +743,56 @@ class Service:
                 return f"Current dependency versions marked as {action}"
             raise ServiceError(f"Unknown action {action}")
         return self.jobs.submit(f"Dependencies: {action}", run)
+
+    def submit_retry_downloads(self, key: str) -> Job:
+        """Download the genre's missing songs again, including those not found on YouTube before."""
+        pl = self._playlist(key)
+        if not pl.spotify_url:
+            raise ServiceError(f"{key} has no Spotify link")
+
+        def run(job: Job) -> str:
+            result = self.sync_playlist(job, pl, retry_unavailable=True)
+            self.write_traktor(job, f"retrying downloads of {key}")
+            self.auto_analyze()
+            return result
+        return self.jobs.submit(f"Retry downloads of {key}", run, dedupe=True)
+
+    def submit_link_file(self, track_id: str, file: str, key: str | None = None) -> Job:
+        """Use a file the user downloaded for a song that has none (e.g. not on YouTube)."""
+        lib = self.require_library()
+        track = lib.tracks.get(track_id)
+        src = Path(file).expanduser()
+        if track is None:
+            raise ServiceError("Song not found")
+        if lib.has_file(track):
+            raise ServiceError("This song already has a file")
+        if not src.is_file() or src.suffix.lower() not in AUDIO_EXTENSIONS:
+            raise ServiceError("Choose an audio file (mp3, m4a, flac, wav, aiff, ...)")
+        playlists = lib.playlists_of(track_id)
+        target = next((p for p in playlists if key and p.key == key), playlists[0] if playlists else None)
+        if target is None:
+            raise ServiceError("The song is in no genre")
+
+        def run(job: Job) -> str:
+            with lib.lock:
+                folder = lib.abs_path(target.folder)
+                folder.mkdir(parents=True, exist_ok=True)
+                wanted = folder / (safe_filename(f"{track.artist_line} - {track.title}") + src.suffix.lower())
+                dst = wanted if src.resolve() == wanted.resolve() else unique_path(wanted)
+                if dst != src:
+                    shutil.move(str(src), str(dst))  # into the genre's folder, named like downloads
+                tags = read_info(dst)
+                track.path, track.mtime = lib.rel(dst), dst.stat().st_mtime
+                track.rating = tags.rating if tags.rating is not None else track.rating
+                track.duration = track.duration or tags.duration
+                track.download_status, track.download_error = "", ""
+                lib.reindex()
+                lib.save()
+            job.write(f"Linked {track.artist_line} - {track.title} -> {track.path}")
+            self.write_traktor(job, "linking a file")
+            self.auto_analyze()
+            return f"File linked: {track.path}"
+        return self.jobs.submit(f"Link file for {track.title}", run)
 
     def submit_create_spotify_playlist(self, key: str) -> Job:
         """Give a genre without link (e.g. an imported folder) its own Spotify playlist."""

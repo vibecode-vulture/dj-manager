@@ -35,6 +35,7 @@ class Settings:
     audio_format: str = "mp3"  # mp3 | m4a
     bitrate: str = "320k"  # e.g. 320k, 256k, auto, disable
     download_threads: int = 4
+    download_retries: int = 2  # extra attempts for songs that failed for technical reasons
     cookie_file: str = ""  # optional YouTube Music cookies (premium quality)
 
     update_on_start: bool = True

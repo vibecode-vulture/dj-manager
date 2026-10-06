@@ -2,15 +2,14 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from conftest import FakeSpotifyServer, connected_api, song, wait
+from conftest import URL_B, FakeSpotifyServer, connected_api, song, traktor_playlists, wait
 from djmanager.library import SOURCE_LOCAL, SOURCE_SPOTIFY
 from djmanager.service import ServiceError
 from djmanager.spotify_api import playlist_id
-from test_service import URL_B, env, traktor_playlists  # noqa: F401 - fixture reuse
 
 
 @pytest.fixture
-def split_env(env):  # noqa: F811
+def split_env(env):
     svc, fake, music, nml = env
     server = FakeSpotifyServer()
     svc.spotify = connected_api(svc.settings, server)

@@ -24,6 +24,7 @@ class ScanResult:
     duplicates: int = 0
     memberships_added: int = 0
     tags_refreshed: int = 0
+    linked: int = 0
     skipped_root_files: int = 0
 
     def summary(self) -> str:
@@ -32,6 +33,7 @@ class ScanResult:
             f"{self.memberships_added} playlist entries, {self.duplicates} duplicate files"
             + (f", {self.skipped_root_files} files directly in the music folder ignored" if self.skipped_root_files else "")
             + (f", ratings re-read from {self.tags_refreshed} changed files" if self.tags_refreshed else "")
+            + (f", {self.linked} files linked to songs that were missing" if self.linked else "")
         )
 
 
@@ -90,15 +92,21 @@ def scan(lib: Library, log=print) -> ScanResult:
                 continue
             info = read_info(current / name)
             track = lib.match(info.spotify_id, info.isrc, info.artists, info.title, info.duration)
-            if track and lib.abs_path(track.path).exists():
+            if track and lib.has_file(track):
                 track.duplicates.append(rel_path)
                 lib.link_spotify(track, info.spotify_id, info.isrc)
                 result.duplicates += 1
                 log(f"Duplicate: {rel_path} = {track.path}")
             else:
-                if track:  # known track whose file vanished - adopt this copy
+                if track:  # known track without file (not downloaded, or vanished) - adopt this one
                     track.path = rel_path
+                    track.download_status, track.download_error = "", ""
+                    track.mtime, track.rating = (current / name).stat().st_mtime, info.rating
                     lib.reindex()
+                    log(f"Linked {rel_path} to {', '.join(track.artists)} - {track.title}")
+                    result.linked += 1
+                    if lib.playlists_of(track.id):
+                        continue  # it already belongs to its genre(s); only the file was missing
                 else:
                     track = lib.add_track(Track(
                         id=lib.new_id(), path=rel_path, title=info.title, artists=info.artists,

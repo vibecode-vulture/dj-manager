@@ -1,7 +1,6 @@
 """Recommendation engine on synthetic data (needs a Python with numpy: DJM_ANALYSIS_PYTHON)."""
 
 import os
-import sys
 
 import pytest
 

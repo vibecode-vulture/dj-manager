@@ -95,6 +95,9 @@ class SpotdlClient:
     def __init__(self, deps: DependencyManager, settings: Settings) -> None:
         self.deps = deps
         self.settings = settings
+        # Songs of the last download() that spotdl did not find on YouTube at all
+        # (spotify id -> message). Other missing songs failed for technical reasons.
+        self.last_unavailable: dict[str, str] = {}
 
     # ------------------------------------------------------------------ helpers
     def _require(self) -> None:
@@ -196,9 +199,15 @@ class SpotdlClient:
             if match and job is not None:
                 job.progress = int(match.group(1)) / max(1, int(match.group(2)))
 
+        lines: list[str] = []
+
+        def watch(line: str) -> None:
+            progress(line)
+            lines.append(line)
+
         cancelled = False
         try:
-            self._run(args, log, progress, cwd=staging)
+            self._run(args, log, watch, cwd=staging)
         except JobCancelled:
             cancelled = True  # keep the songs that finished before Stop
         except SpotdlError as exc:
@@ -214,9 +223,22 @@ class SpotdlClient:
                 result[file.stem] = file
             else:
                 log(f"Ignoring incomplete download: {', '.join(song.artists)} - {song.title}")
+        self.last_unavailable = self._not_found(songs, lines)
         if cancelled:
             log(f"Stopped - keeping {len(result)} finished downloads")
         return result
+
+    @staticmethod
+    def _not_found(songs: list[RemoteSong], lines: list[str]) -> dict[str, str]:
+        """Songs spotdl reported as not found ('LookupError: No results found for song: A - T')."""
+        misses = [line.split("No results found for song:", 1)[1].strip().lower()
+                  for line in lines if "No results found for song:" in line]
+        found: dict[str, str] = {}
+        for song in songs:
+            names = {f"{(song.artists or [''])[0]} - {song.title}".lower(), f"{', '.join(song.artists)} - {song.title}".lower()}
+            if any(miss.startswith(name) or name in miss for miss in misses for name in names):
+                found[song.spotify_id] = "not found on YouTube / YouTube Music"
+        return found
 
     @staticmethod
     def _complete(file: Path, song: RemoteSong) -> bool:

@@ -16,6 +16,7 @@ from .analysis import analysis_packages, format_key, key_sort
 from .genres import GenreError
 from .jobs import Job
 from .library import SOURCE_LOCAL, Library, Track
+from .util import AUDIO_EXTENSIONS
 from .service import Service, ServiceError
 from .traktor import TraktorError, find_collections, traktor_running
 from .spotify_api import SpotifyAPIError
@@ -26,10 +27,12 @@ STATIC = Path(__file__).parent / "static"
 
 def track_row(lib: Library, track: Track, source: str | None = None, playlist_key: str | None = None, status: str = "",
               notation: str = "openkey") -> dict:
-    exists = lib.abs_path(track.path).exists()
+    exists = lib.has_file(track)
     in_playlists = [pl.key for pl in lib.playlists_of(track.id)]
     if not status:
-        if not exists:
+        if not track.path and track.download_status:
+            status = track.download_status  # "failed" (download error) or "unavailable" (not on YouTube)
+        elif not exists:
             status = "missing"
         elif not in_playlists:
             status = "deleted"
@@ -45,6 +48,7 @@ def track_row(lib: Library, track: Track, source: str | None = None, playlist_ke
         "rating": track.stars, "rating_source": "file" if track.rating is not None else "traktor" if track.rating_traktor else "",
         "bpm": track.bpm, "key": format_key(track.key, notation), "key_sort": key_sort(track.key),
         "analysis": track.analysis, "analysis_error": track.analysis_error,
+        "download_error": track.download_error, "has_file": exists,
         "energy": track.energy, "styles": [[label.split("---")[-1], p] for label, p in track.styles[:3]],
     }
 
@@ -114,7 +118,8 @@ def create_app(service: Service | None = None) -> FastAPI:
         return find_collections(svc.settings.wine_prefix)
 
     @app.get("/api/browse")
-    def browse(path: str = "", files: bool = False):
+    def browse(path: str = "", files: bool = False, kind: str = "nml"):
+        wanted = AUDIO_EXTENSIONS if kind == "audio" else {".nml"}
         if not path:
             if paths.IS_WINDOWS:
                 drives = [f"{d}:\\" for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
@@ -130,7 +135,7 @@ def create_app(service: Service | None = None) -> FastAPI:
                     continue
                 if child.is_dir():
                     dirs.append(child.name)
-                elif files and child.suffix.lower() == ".nml":
+                elif files and child.suffix.lower() in wanted:
                     file_list.append(child.name)
         except PermissionError:
             pass
@@ -219,6 +224,14 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.post("/api/playlists/{key}/split")
     def split(key: str, data: dict = Body(...)):
         return job_ref(svc.submit_split(key, list(data.get("track_ids", [])), data.get("name", "")))
+
+    @app.post("/api/playlists/{key}/retry-downloads")
+    def retry_downloads(key: str):
+        return job_ref(svc.submit_retry_downloads(key))
+
+    @app.post("/api/tracks/{track_id}/link")
+    def link_file(track_id: str, data: dict = Body(...)):
+        return job_ref(svc.submit_link_file(track_id, data.get("path", ""), data.get("playlist")))
 
     @app.post("/api/playlists/{key}/create-spotify")
     def create_spotify(key: str):

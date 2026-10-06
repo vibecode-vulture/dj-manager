@@ -2,14 +2,12 @@ import json
 import os
 import sys
 import time
-from pathlib import Path
 
 import pytest
 
 from conftest import wait
 from djmanager.analysis import WORKER_SCRIPT, Analyzer, format_key, key_sort
 from djmanager.settings import Settings
-from test_service import env  # noqa: F401 - fixture reuse
 
 # A stand-in for the analysis worker: same protocol, fake results.
 # Files named "*crash*" kill the worker, "*bad*" return an error.
@@ -71,7 +69,7 @@ def test_workers_handle_crash_and_errors(tmp_path):
 
 
 @pytest.fixture
-def analysis_env(env, monkeypatch):  # noqa: F811
+def analysis_env(env, monkeypatch):
     svc, fake, music, nml = env
     monkeypatch.setattr(svc.analyzer, "ensure_tools", lambda log, styles=False: "fake")
     monkeypatch.setattr(svc.analyzer, "worker_command", lambda: [sys.executable, "-c", FAKE_WORKER])
@@ -155,7 +153,7 @@ def test_rating_scales():
     assert [scaled_to_stars(v) for v in ("0.6", "3", "80", "0", "x")] == [3, 3, 4, None, None]
 
 
-def test_traktor_rating_is_the_fallback(env):  # noqa: F811
+def test_traktor_rating_is_the_fallback(env):
     import xml.etree.ElementTree as ET
 
     from djmanager.jobs import Job
