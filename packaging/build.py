@@ -55,6 +55,13 @@ def pyinstaller(name: str, onefile: bool, workdir: Path, distdir: Path) -> None:
     subprocess.run(args, check=True, cwd=ROOT)
 
 
+def publish(src: Path, dst: Path) -> None:
+    # Unlink first: overwriting a binary that is currently running fails on Linux
+    # ("Text file busy"); the running process keeps its own copy of the old file.
+    dst.unlink(missing_ok=True)
+    shutil.copy2(src, dst)
+
+
 def find_iscc() -> str | None:
     found = shutil.which("iscc")
     if found:
@@ -78,7 +85,7 @@ def main() -> None:
         if IS_WINDOWS:
             pyinstaller("DJManager", True, BUILD / "onefile", BUILD / "onefile-dist")
             portable = DIST / f"DJManager-{__version__}-portable.exe"
-            shutil.copy2(BUILD / "onefile-dist" / "DJManager.exe", portable)
+            publish(BUILD / "onefile-dist" / "DJManager.exe", portable)
             print(f"-> {portable}")
             if not args.skip_installer:
                 pyinstaller("DJManager", False, BUILD / "onedir", BUILD / "onedir-dist")
@@ -91,7 +98,7 @@ def main() -> None:
         else:
             pyinstaller("dj-manager", True, BUILD / "onefile", BUILD / "onefile-dist")
             binary = DIST / f"dj-manager-{__version__}-linux-x86_64"
-            shutil.copy2(BUILD / "onefile-dist" / "dj-manager", binary)
+            publish(BUILD / "onefile-dist" / "dj-manager", binary)
             binary.chmod(0o755)
             print(f"-> {binary}")
     finally:
