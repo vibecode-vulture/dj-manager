@@ -160,3 +160,25 @@ def test_traktor_rating_is_the_fallback(env):  # noqa: F811
     svc.write_traktor(Job(id="t", title="t"), "test")
     assert klonk.rating_traktor == 4 and klonk.stars == 4
     assert acid.stars == 2
+
+
+def test_spotdl_popularity_is_not_a_rating(tmp_path):
+    import subprocess
+
+    import pytest as _pytest
+    from mutagen.id3 import ID3, POPM
+
+    from djmanager.audio import read_info
+
+    ffmpeg = os.environ.get("DJM_FFMPEG") or __import__("shutil").which("ffmpeg")
+    if not ffmpeg:
+        _pytest.skip("ffmpeg needed to create an mp3")
+    f = tmp_path / "x.mp3"
+    subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=d=2", str(f)], check=True)
+    tags = ID3()
+    tags.add(POPM(email="", rating=25, count=0))  # what spotdl writes: popularity 10/100
+    tags.save(f)
+    assert read_info(f).rating is None
+    tags.add(POPM(email="traktor@native-instruments.de", rating=153, count=0))
+    tags.save(f)
+    assert read_info(f).rating == 3

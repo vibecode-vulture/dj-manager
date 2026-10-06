@@ -96,7 +96,9 @@ def read_info(path: Path) -> AudioInfo:
         return ""
 
     if any(k.startswith(("TIT2", "TPE1", "TALB", "WOAS", "TSRC", "POPM")) for k in keys):  # ID3
-        popm = [tags[k] for k in keys if k.startswith("POPM")]
+        # spotdl stores Spotify's popularity in a POPM frame without email - not a rating.
+        # Real ratings (Traktor, WMP, MusicBee, ...) always carry the program's email.
+        popm = [tags[k] for k in keys if k.startswith("POPM") and getattr(tags[k], "email", "")]
         # several programs can each store a rating - prefer Traktor's
         popm.sort(key=lambda f: "native-instruments" not in (getattr(f, "email", "") or ""))
         if popm:
