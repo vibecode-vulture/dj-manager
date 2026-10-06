@@ -97,7 +97,8 @@ async function pollJob(id) {
   if (job.log.length) log(job.log);
   S.jobs[id] = job.log_size;
   $("#console-status").textContent = `${job.title}: ${job.cancel_requested && job.status === "running" ? "stopping" : job.status}`;
-  if (job.status === "running") updateJobIndicator(job);
+  if (job.lane === "analysis") updateAnalysisIndicator(job.status === "running" ? job : null);
+  else if (job.status === "running") updateJobIndicator(job);
   else if (S.runningJob === id) updateJobIndicator(null);
   if (["done", "failed", "cancelled"].includes(job.status)) {
     if (job.status === "done") { log([`✔ ${job.result || job.title}`], "ok"); toast(job.result || `${job.title} done`); }
@@ -118,6 +119,62 @@ function updateJobIndicator(job) {
   stop.hidden = !job;
   stop.disabled = !!(job && job.cancel_requested);
   stop.textContent = job && job.cancel_requested ? "STOPPING…" : "■ STOP";
+}
+
+// While an analysis runs, fill in BPM/key of the visible table without re-rendering it
+// (keeps selection, scroll position and the search field).
+let lastCellRefresh = 0;
+async function refreshAnalysisCells() {
+  if (Date.now() - lastCellRefresh < 5000) return;
+  lastCellRefresh = Date.now();
+  const v = S.view;
+  const url = v.type === "genre" ? `/api/genre/${encodeURIComponent(v.key)}/tracks`
+    : { collection: "/api/collection", removed: "/api/removed", duplicates: "/api/duplicates" }[v.type];
+  if (!url) return;
+  let rows;
+  try { rows = await api("GET", url); } catch { return; }
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  S.rows = S.rows.map((r) => byId.get(r.id) || r);
+  $$("tbody tr[data-id]").forEach((tr) => {
+    const r = byId.get(tr.dataset.id);
+    if (!r) return;
+    const bpm = $("td.bpm", tr), key = $("td.key", tr);
+    if (bpm) bpm.innerHTML = bpmCell(r);
+    if (key) key.textContent = r.key;
+  });
+}
+
+function updateAnalysisIndicator(job) {
+  const a = S.app?.analysis || {};
+  const ind = $("#ind-analysis"), btn = $("#btn-analysis");
+  const left = a.pending || 0;
+  S.analysisJob = job ? job.id : null;
+  if (job) {
+    refreshAnalysisCells();
+    ind.className = "ind busy";
+    $("#analysis-title").textContent = `ANALYSIS ${job.progress != null ? Math.round(job.progress * 100) + "%" : ""}`;
+    btn.textContent = job.cancel_requested ? "STOPPING…" : "■ STOP";
+    btn.className = "btn danger tiny";
+    btn.disabled = !!job.cancel_requested;
+  } else if (left && S.app?.library_loaded) {
+    ind.className = "ind warn";
+    $("#analysis-title").textContent = a.paused ? `ANALYSIS PAUSED · ${left} LEFT` : `${left} NOT ANALYSED`;
+    btn.textContent = a.paused ? "▶ RESUME" : "▶ ANALYSE";
+    btn.className = "btn accent tiny";
+    btn.disabled = false;
+  }
+  const show = !!job || (left > 0 && S.app?.library_loaded);
+  ind.hidden = btn.hidden = !show;
+}
+
+function analysisButton() {
+  if (S.analysisJob) {
+    const id = S.analysisJob;
+    confirmBox("PAUSE ANALYSIS", "Pause the BPM/key analysis? Finished songs are kept. It continues when you press Resume (here or in Settings › Analysis).",
+      "Pause", async () => { await act(() => api("POST", `/api/jobs/${id}/cancel`)); refreshState(); });
+  } else {
+    runJob(api("POST", "/api/analysis", { mode: "pending" }));
+  }
 }
 
 function stopJob() {
@@ -141,6 +198,8 @@ async function refreshState() {
   d.lastChild.textContent = a.deps_installed ? "SPOTDL" : "SPOTDL MISSING";
   if (a.current_job) follow(a.current_job);
   else if (!Object.keys(S.jobs).length) updateJobIndicator(null);
+  if (a.analysis?.job) follow(a.analysis.job);
+  updateAnalysisIndicator(a.analysis?.job || null);
   const up = $("#btn-app-update");
   up.hidden = !(a.update && a.update.available && a.update.asset_url);
   if (!up.hidden) up.textContent = `UPDATE TO ${a.update.latest}`;
@@ -292,11 +351,24 @@ async function renderList(deck, view, url, title, help) {
 const COLUMNS = {
   title: (r) => r.title, artists: (r) => r.artists, album: (r) => r.album, duration: (r) => r.duration,
   status: (r) => r.status, playlists: (r) => r.playlists.join(" "), path: (r) => r.path,
+  rating: (r) => r.rating ?? 0, bpm: (r) => r.bpm ?? 0, key: (r) => r.key_sort,
 };
+
+function stars(r) {
+  if (!r.rating) return "";
+  const src = r.rating_source === "traktor" ? "from Traktor" : "from the file's tags";
+  return `<span class="stars" title="${r.rating} stars ${src}">${"★".repeat(r.rating)}<i>${"★".repeat(5 - r.rating)}</i></span>`;
+}
+
+function bpmCell(r) {
+  if (r.bpm) return r.bpm.toFixed(1);
+  if (r.analysis === "failed") return `<span class="ana-failed" title="${esc(r.analysis_error)}">!</span>`;
+  return `<span class="ana-pending" title="not analysed yet">·</span>`;
+}
 
 function renderTable(view, opts) {
   const f = S.filter.toLowerCase();
-  let rows = S.rows.filter((r) => !f || `${r.title} ${r.artists} ${r.album} ${r.path} ${r.playlists.join(" ")}`.toLowerCase().includes(f));
+  let rows = S.rows.filter((r) => !f || `${r.title} ${r.artists} ${r.album} ${r.path} ${r.playlists.join(" ")} ${r.key}`.toLowerCase().includes(f));
   if (S.sort.col && COLUMNS[S.sort.col]) {
     const get = COLUMNS[S.sort.col];
     rows = [...rows].sort((a, b) => { const x = get(a), y = get(b); return (x > y ? 1 : x < y ? -1 : 0) * S.sort.dir; });
@@ -312,12 +384,14 @@ function renderTable(view, opts) {
     </div>
     ${rows.length ? `<table class="tracks"><thead><tr>
       <th class="num">#</th>${th("title", "TITLE")}${th("artists", "ARTIST")}${th("album", "ALBUM")}
+      ${th("rating", "RATING", "rating")}${th("bpm", "BPM", "bpm")}${th("key", "KEY", "key")}
       ${th("duration", "TIME", "time")}${th("status", "STATUS", "st")}
       ${opts.showPlaylist ? th("playlists", "PLAYLISTS") : ""}${opts.showPath ? th("path", "FILE") : ""}
       ${opts.showDuplicates ? "<th>DUPLICATE FILES</th>" : ""}
     </tr></thead><tbody>
     ${rows.map((r, i) => `<tr data-id="${esc(r.id)}" class="st-${r.status} ${S.selected.has(r.id) ? "sel" : ""}" title="${esc(r.path)}">
       <td class="num">${i + 1}</td><td>${esc(r.title)}</td><td>${esc(r.artists)}</td><td>${esc(r.album)}</td>
+      <td class="rating">${stars(r)}</td><td class="bpm">${bpmCell(r)}</td><td class="key">${esc(r.key)}</td>
       <td class="time">${fmtTime(r.duration)}</td><td class="st">${badge(r)}</td>
       ${opts.showPlaylist ? `<td>${r.playlists.map((p) => `<span class="pl-chip">${esc(p)}</span>`).join("")}</td>` : ""}
       ${opts.showPath ? `<td class="mono">${esc(r.path)}</td>` : ""}
@@ -598,8 +672,22 @@ function renderSettings(view) {
     ${field("On start", check("check_app_updates", "Check for new DJ Manager versions when it starts"))}
     ${field("", `<div class="row"><button class="btn" id="check-update">CHECK FOR UPDATES</button><span class="help" id="update-result"></span></div>`)}
 
+    <h2>ANALYSIS</h2>
+    ${field("Status", `<div class="row" id="analysis-status">${analysisStatusHtml()}</div>`)}
+    ${field("", `<div class="row">
+        <button class="btn accent" onclick="runJob(api('POST','/api/analysis',{mode:'pending'}))">${S.app.analysis?.paused ? "▶ RESUME" : "▶ ANALYSE NEW SONGS"}</button>
+        <button class="btn" onclick="runJob(api('POST','/api/analysis',{mode:'failed'}))">RETRY FAILED</button>
+        <button class="btn" onclick="confirmBox('RE-ANALYSE','Analyse all songs again? Existing BPM and key values are replaced.','Re-analyse',()=>runJob(api('POST','/api/analysis',{mode:'all'})))">RE-ANALYSE ALL</button></div>`,
+      "BPM and key are stored in DJ Manager only; Traktor keeps its own analysis. The tools (Essentia on Linux, librosa on Windows) are installed into the managed environment on first use.")}
+    ${field("Automatic", check("analysis_auto", "Analyse new songs automatically (downloads, import, songs found in the music folder)"))}
+    ${field("Key notation", select("key_notation", [["openkey", "Open Key (1m, 8d) - like Traktor"], ["camelot", "Camelot (8A, 3B)"], ["musical", "Musical (Am, C#)"]]))}
+    ${field("BPM range", `<div class="row">${text("bpm_min", "", "number")}<span>to</span>${text("bpm_max", "", "number")}</div>`,
+      "Results outside are halved or doubled, e.g. 87 BPM becomes 174 BPM with a range of 90-180.")}
+    ${field("Parallel analyses", text("analysis_workers", "", "number"), "0 = automatic (CPU cores - 1, at most 4).")}
+
     <h2>GENERAL</h2>
     ${field("On start", check("update_on_start", "Update all playlists when DJ Manager starts"))}
+    ${field("", check("scan_on_start", "Look for songs added to the music folder outside DJ Manager"))}
     ${field("Backups to keep", text("backups_to_keep", "", "number"), "The initial backup is always kept.")}
     <p><button class="btn accent" id="save-settings">SAVE SETTINGS</button></p>
   </div>`;
@@ -622,6 +710,12 @@ function applyUpdate() {
   const u = S.app?.update || {};
   confirmBox("UPDATE DJ MANAGER", `Download and install DJ Manager <b>${esc(u.latest || "")}</b>? The app closes and starts again with the new version. Your library, settings and spotdl environment are kept.`,
     "Update now", () => runJob(api("POST", "/api/update/apply")));
+}
+
+function analysisStatusHtml() {
+  const a = S.app.analysis || {};
+  const engine = a.engine ? `engine <b>${esc(a.engine)}</b>` : "tools not installed yet";
+  return `<span>${a.done || 0} analysed · ${a.pending || 0} pending · ${a.failed || 0} failed · ${engine}${a.paused ? " · <b>paused</b>" : ""}${a.job ? " · running" : ""}</span>`;
 }
 
 async function connectSpotify() {
@@ -717,6 +811,7 @@ $("#btn-update-all").addEventListener("click", () => runJob(api("POST", "/api/up
 $("#btn-write").addEventListener("click", () => runJob(api("POST", "/api/traktor/write")));
 $("#btn-app-update").addEventListener("click", applyUpdate);
 $("#btn-stop").addEventListener("click", stopJob);
+$("#btn-analysis").addEventListener("click", analysisButton);
 $("#btn-console").addEventListener("click", () => {
   const c = $("#console");
   c.classList.toggle("collapsed");

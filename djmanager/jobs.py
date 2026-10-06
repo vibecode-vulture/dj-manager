@@ -32,6 +32,7 @@ class Job:
     error: str = ""
     log: list[str] = field(default_factory=list)
     progress: float | None = None
+    lane: str = "main"  # which JobRunner runs it ("main" or "analysis")
     cancel_requested: bool = False
     processes: set[Any] = field(default_factory=set, repr=False)
 
@@ -48,12 +49,13 @@ class Job:
         return {
             "id": self.id, "title": self.title, "status": self.status, "started_at": self.started_at,
             "finished_at": self.finished_at, "result": self.result, "error": self.error,
-            "progress": self.progress, "cancel_requested": self.cancel_requested, "log_offset": since, "log": self.log[since:], "log_size": len(self.log),
+            "progress": self.progress, "cancel_requested": self.cancel_requested, "lane": self.lane, "log_offset": since, "log": self.log[since:], "log_size": len(self.log),
         }
 
 
 class JobRunner:
-    def __init__(self) -> None:
+    def __init__(self, lane: str = "main") -> None:
+        self.lane = lane
         self._queue: deque[tuple[Job, Callable[[Job], str | None]]] = deque()
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
@@ -68,7 +70,7 @@ class JobRunner:
                 for active in [self.current, *(j for j, _ in self._queue)]:
                     if active is not None and active.title == title and not active.cancel_requested:
                         return active
-        job = Job(id=uuid.uuid4().hex[:10], title=title)
+        job = Job(id=uuid.uuid4().hex[:10], title=title, lane=self.lane)
         with self._cv:
             self._jobs[job.id] = job
             self._order.append(job.id)

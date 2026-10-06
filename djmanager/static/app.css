@@ -132,6 +132,15 @@ table.tracks { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .tracks .time { width: 60px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); }
 .tracks th.time { font-size: 10px; color: var(--muted); }
 .tracks .st { width: 88px; }
+.tracks .rating { width: 78px; }
+.tracks .bpm { width: 58px; text-align: right; font-variant-numeric: tabular-nums; }
+.tracks .key { width: 48px; text-align: center; color: var(--active); font-weight: 600; }
+.tracks th.bpm, .tracks th.key { color: var(--muted); font-weight: 600; }
+.stars { color: var(--yellow); letter-spacing: 1px; font-size: 11px; }
+.stars i { color: var(--control); font-style: normal; }
+.ana-pending { color: var(--muted); }
+.ana-failed { color: var(--orange); font-weight: 700; cursor: help; }
+.ind[hidden], .btn[hidden] { display: none; }
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 2px; font-weight: 700; text-transform: uppercase; }
 .badge.spotify { background: var(--control); color: var(--active); }
 .badge.local { background: var(--orange); color: var(--orange-ink); }

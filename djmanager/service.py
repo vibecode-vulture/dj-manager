@@ -37,7 +37,7 @@ class Service:
         self.spotify = spotify or SpotifyAPI(self.settings_store.settings)
         self.jobs = JobRunner()
         # Analysis runs in its own lane so a long first analysis never blocks downloads.
-        self.analysis_jobs = JobRunner()
+        self.analysis_jobs = JobRunner(lane="analysis")
         self.analyzer = Analyzer(self.deps, self.settings_store.settings)
         self.updater = Updater(self.settings_store.settings)
         self.library: Library | None = None
