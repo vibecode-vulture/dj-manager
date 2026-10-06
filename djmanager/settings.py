@@ -22,11 +22,11 @@ class Settings:
     # Name of the Traktor playlist folder owned by DJ Manager
     traktor_root_folder: str = "DJ Manager"
 
-    # Spotify: "default" uses spotdl's built-in credentials, "custom" the ones below
-    spotify_auth_mode: str = "default"
+    # Client ID of the user's own Spotify app: the one Spotify login (spotify_api.py)
     spotify_client_id: str = ""
+    # No longer used (spotdl reads playlists without credentials); kept so old settings load
+    spotify_auth_mode: str = "default"
     spotify_client_secret: str = ""
-    # Use OAuth user login (needed for private playlists)
     spotify_user_auth: bool = False
     spotify_user_name: str = ""
     # Name of playlists DJ Manager creates on Spotify: prefix + genre key

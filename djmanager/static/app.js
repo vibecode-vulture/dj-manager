@@ -658,14 +658,9 @@ function renderSettings(view) {
     ${field("Spotify account", `<div class="row">${sp.connected
         ? `<span>connected as <b>${esc(sp.user)}</b></span> <button class="btn" onclick="disconnectSpotify()">DISCONNECT</button>`
         : `<button class="btn accent" onclick="connectSpotify()">CONNECT SPOTIFY ACCOUNT</button><span class="help">${sp.has_client_id ? "not connected" : "enter and save the Client ID first"}</span>`}</div>`,
-      "DJ Manager only creates new playlists and adds songs to them. It never deletes or changes your other playlists.")}
+      "The only login DJ Manager needs: your own playlists (also private ones) are read through it, and playlists are created with it. "
+      + "Other people's public playlists are read by spotdl without any login. DJ Manager never deletes or changes your other playlists.")}
     ${field("Playlist name prefix", text("spotify_playlist_prefix"), "Playlists created by DJ Manager are named prefix + genre key, e.g. <span class='mono'>DJM · house_ukg-garage</span>.")}
-    ${field("spotdl credentials", select("spotify_auth_mode", [["default", "spotdl built-in credentials"], ["custom", "Own Spotify app (client id / secret)"]]),
-      "Reading other people's playlists uses spotdl. Your own app's credentials avoid rate limits.")}
-    ${field("Client secret", text("spotify_client_secret", "only for spotdl with own credentials", "password"))}
-    ${field("spotdl login", `${check("spotify_user_auth", "Let spotdl use my Spotify login (other people's private playlists shared with me)")}
-      <div class="row" style="margin-top:6px"><button class="btn" onclick="runJob(api('POST','/api/spotify/login'))">LOGIN WITH SPOTIFY</button>
-      <span class="help">${s.spotify_user_name ? "logged in as " + esc(s.spotify_user_name) : "not logged in"}</span></div>`)}
 
     <h2>DOWNLOAD</h2>
     ${field("Format", select("audio_format", [["mp3", "MP3"], ["m4a", "M4A / AAC"]]))}

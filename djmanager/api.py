@@ -305,10 +305,6 @@ def create_app(service: Service | None = None) -> FastAPI:
         svc.spotify.disconnect()
         return svc.spotify.status()
 
-    @app.post("/api/spotify/login")
-    def spotify_login():
-        return job_ref(svc.submit_login())
-
     # ------------------------------------------------------------------ app updates
     @app.get("/api/update/check")
     def update_check():

@@ -1,6 +1,7 @@
 """Thin wrapper around spotdl running in the managed environment.
 
-Downloads use the CLI with a .spotdl save file. Downloads go to a staging folder named by
+Downloads use the CLI with a .spotdl save file. spotdl reads public playlists without
+any Spotify login; the only login in DJ Manager is the Spotify account of spotify_api. Downloads go to a staging folder named by
 Spotify track id, which makes the mapping file -> track unambiguous before files are
 moved into the collection.
 
@@ -96,15 +97,6 @@ class SpotdlClient:
         self.settings = settings
 
     # ------------------------------------------------------------------ helpers
-    def _auth_args(self) -> list[str]:
-        s = self.settings
-        args: list[str] = []
-        if s.spotify_auth_mode == "custom" and s.spotify_client_id and s.spotify_client_secret:
-            args += ["--client-id", s.spotify_client_id, "--client-secret", s.spotify_client_secret]
-        if s.spotify_user_auth:
-            args += ["--user-auth", "--headless"]
-        return args
-
     def _require(self) -> None:
         if not self.deps.is_installed() or not self.deps.installed_versions().get("spotdl"):
             raise SpotdlError("spotdl is not installed - open Dependencies and install it")
@@ -151,7 +143,7 @@ class SpotdlClient:
             if not self._fetch_fast(url, save_file, log):
                 log("Falling back to 'spotdl save' (slow for large playlists)")
                 self._run(["save", url, "--save-file", str(save_file), "--lyrics",
-                           "--threads", "8", "--log-level", "INFO", *self._auth_args()], log)
+                           "--threads", "8", "--log-level", "INFO"], log)
             if not save_file.exists():
                 raise SpotdlError("spotdl did not produce a save file")
             data = json.loads(save_file.read_text(encoding="utf-8"))
@@ -161,13 +153,8 @@ class SpotdlClient:
 
     def _fetch_fast(self, url: str, save_file: Path, log) -> bool:
         """List the playlist only (no per-song refetch). False = not supported by this spotdl."""
-        s = self.settings
-        custom = s.spotify_auth_mode == "custom" and s.spotify_client_id and s.spotify_client_secret
-        cfg = {
-            "url": url, "out": str(save_file), "user_auth": bool(s.spotify_user_auth),
-            "client_id": s.spotify_client_id if custom else "",
-            "client_secret": s.spotify_client_secret if custom else "",
-        }
+        # spotdl's default (non-API) reader needs no credentials and no login
+        cfg = {"url": url, "out": str(save_file), "user_auth": False, "client_id": "", "client_secret": ""}
         log(f"Fetching {url}")
         code, lines = self._stream([str(self.deps.python), "-c", FETCH_SCRIPT, json.dumps(cfg)], log)
         if code == UNSUPPORTED_EXIT and any(line.startswith("DJM_UNSUPPORTED") for line in lines):
@@ -199,7 +186,6 @@ class SpotdlClient:
             args += ["--bitrate", s.bitrate]
         if s.cookie_file:
             args += ["--cookie-file", s.cookie_file]
-        args += self._auth_args()
         job = current_job.get()
 
         def progress(line: str) -> None:
@@ -243,24 +229,3 @@ class SpotdlClient:
         for d in dirs:
             if d.name.startswith("staging-"):
                 shutil.rmtree(d, ignore_errors=True)
-
-    def login(self, log=print) -> str:
-        """Interactive OAuth login; the token is cached by spotdl for later --user-auth runs."""
-        s = self.settings
-        if s.spotify_auth_mode == "custom" and s.spotify_client_id and s.spotify_client_secret:
-            creds = f"cid, secret = {s.spotify_client_id!r}, {s.spotify_client_secret!r}"
-        else:
-            creds = "from spotdl.utils.config import DEFAULT_CONFIG as C\ncid, secret = C['client_id'], C['client_secret']"
-        script = (
-            f"{creds}\n"
-            "from spotdl.utils.spotify import SpotifyClient\n"
-            "c = SpotifyClient.init(client_id=cid, client_secret=secret, user_auth=True)\n"
-            "u = c.current_user()\n"
-            "print('LOGGED_IN:' + (u.get('display_name') or u.get('id') or ''))\n"
-        )
-        self._require()
-        _, lines = self._stream([str(self.deps.python), "-c", script], log)
-        for line in lines:
-            if line.startswith("LOGGED_IN:"):
-                return line.split(":", 1)[1]
-        raise SpotdlError("Spotify login failed - see log")

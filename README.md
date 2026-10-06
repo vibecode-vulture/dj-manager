@@ -44,7 +44,8 @@ First start:
 2. **Settings** → select the main music folder. Existing folders are imported as genres.
    The Traktor `collection.nml` is auto-detected (Windows `Documents/Native Instruments/Traktor x.y.z`,
    Linux: Wine prefixes `~/.wine`, `~/.local/share/wineprefixes/*`, `~/Games/*`) or can be selected.
-3. Optional, needed for splitting genres: connect your Spotify account (see below).
+3. Optional, needed for splitting genres and for your private playlists: connect your Spotify
+   account (see below). Public playlists work without any login.
 
 Close Traktor whenever DJ Manager writes the collection. DJ Manager checks for a running
 Traktor and refuses to write while it is open.
@@ -103,11 +104,14 @@ have up to 5 users.
 1. Open [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) and
    create an app. Add the redirect URI `http://127.0.0.1:9900/` and select **Web API**.
 2. Copy the app's **Client ID** into Settings → Spotify → Client ID. A client secret is
-   not needed for this (DJ Manager logs in with PKCE).
+   not needed (DJ Manager logs in with PKCE).
 3. Press **CONNECT SPOTIFY ACCOUNT** and log in in the browser window that opens.
 
-Playlists of the connected account are then read through the official Web API, which also
-works for private playlists. Other people's playlists are still read with spotdl.
+This is the only login in DJ Manager. Playlists of the connected account are read through
+the official Web API, which also works for private playlists. Other people's public
+playlists are read by spotdl, which needs no login. (Since February 2026 Spotify only lets
+apps read the songs of playlists you own or collaborate on, so a login would not help spotdl
+with other people's private playlists either.)
 
 ## Ratings, BPM and key
 

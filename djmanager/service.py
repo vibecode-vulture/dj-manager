@@ -790,14 +790,6 @@ class Service:
             return f"Spotify account connected: {name}"
         return self.jobs.submit("Connect Spotify account", run, dedupe=True)
 
-    def submit_login(self) -> Job:
-        def run(job: Job) -> str:
-            job.write("A browser window opens for the Spotify login ...")
-            name = self.spotdl.login(job.write)
-            self.settings_store.update({"spotify_user_name": name, "spotify_user_auth": True})
-            return f"Logged in as {name}"
-        return self.jobs.submit("Spotify login", run)
-
     def submit_app_update(self) -> Job:
         return self.jobs.submit("Update DJ Manager", lambda job: self.updater.apply(job.write))
 
