@@ -323,7 +323,7 @@ async function renderGenre(deck, view) {
   S.rows = await api("GET", `/api/genre/${encodeURIComponent(key)}/tracks`);
   const tools = node.has_playlist ? `
       <button class="btn" ${node.spotify_url ? "" : "disabled"} onclick="syncPlaylist(${js(key)})">⟳ UPDATE</button>
-      ${node.spotify_url ? "" : `<button class="btn accent" onclick="createSpotifyPlaylist(${js(key)})" title="Create a private Spotify playlist with the songs of this genre and link it">+ SPOTIFY PLAYLIST</button>`}
+      ${node.spotify_url ? "" : `<button class="btn accent" onclick="createSpotifyPlaylist(${js(key)})" title="Create a Spotify playlist with the songs of this genre and link it">+ SPOTIFY PLAYLIST</button>`}
       <button class="btn" onclick="editLink(${js(key)})">🔗 LINK</button>
       <button class="btn" onclick="splitSelected(${js(key)})" title="Move the selected songs into a new sub genre">⑂ SPLIT</button>
       ${S.app?.settings.rec_enabled ? `<button class="btn" onclick="setView({type:'recommend', key:${js(key)}})" title="Suggested groups for a new sub genre">✦ RECOMMEND</button>` : ""}
@@ -529,7 +529,7 @@ function needSpotify() {
 function createSpotifyPlaylist(key) {
   if (needSpotify()) return;
   const node = findNode(key);
-  confirmBox("CREATE SPOTIFY PLAYLIST", `Create the private playlist <b>${esc(spotifyName(key))}</b> in your Spotify account with the ${node.own_count} songs of this genre and link it?<br><br>
+  confirmBox("CREATE SPOTIFY PLAYLIST", `Create the playlist <b>${esc(spotifyName(key))}</b> in your Spotify account with the ${node.own_count} songs of this genre and link it?<br><br>
     Songs without a Spotify id stay in the genre as <span class="badge local">LOCAL</span>.`,
     "Create", () => runJob(api("POST", `/api/playlists/${encodeURIComponent(key)}/create-spotify`)), "accent");
 }
@@ -549,7 +549,7 @@ function openSplitDialog(key, ids, nameHint = "") {
     <div class="field"><label>Songs</label><span>${ids.length} selected · ${rest} stay in <span class="mono">${esc(key)}</span></span></div>
     <div class="field"><label>Sub genre name</label><input type="text" id="split-name" placeholder="speed garage" value="${esc(nameHint)}"></div>
     <div class="preview" id="split-preview"></div>
-    <p class="help">${node.spotify_url ? "The genre is updated from Spotify first. " : ""}Two new private playlists are created in your Spotify account:
+    <p class="help">${node.spotify_url ? "The genre is updated from Spotify first. " : ""}Two new playlists are created in your Spotify account:
       one for the new sub genre with the selected songs and one for <span class="mono">${esc(key)}</span> with the remaining songs.
       The previous Spotify playlist is <b>not changed or deleted</b>. Files in this genre's folder move into the new sub folder;
       songs stored in other genres' folders stay where they are.</p>`,

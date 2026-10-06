@@ -241,6 +241,14 @@ class SpotifyAPI:
         """Create a playlist in the user's account. Returns {'id', 'url'}."""
         data = self.request("POST", "/me/playlists", body={"name": name, "description": description, "public": public})
         url = (data.get("external_urls") or {}).get("spotify") or f"https://open.spotify.com/playlist/{data['id']}"
+        if not public and data.get("public"):
+            # Spotify has long ignored "public": false on creation; asking again afterwards is the
+            # documented way, but Spotify may ignore that too (the app's "private" toggle is not
+            # available through the API at all).
+            try:
+                self.request("PUT", f"/playlists/{data['id']}", body={"public": False})
+            except SpotifyAPIError:
+                pass
         return {"id": data["id"], "url": url}
 
     def add_tracks(self, pid: str, spotify_ids: list[str]) -> None:

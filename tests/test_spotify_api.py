@@ -90,3 +90,20 @@ def test_pkce_login_rejects_wrong_state(home):
     urllib.request.urlopen("http://127.0.0.1:9900/?code=abc&state=forged").read()
     t.join(10)
     assert errors and "failed" in errors[0] and not api.connected
+
+
+def test_asks_again_for_non_public_when_spotify_ignores_it(home):
+    server = FakeSpotifyServer()
+    original = server.transport
+
+    def transport(method, url, headers, body):  # Spotify answers "public": true despite false
+        status, h, raw = original(method, url, headers, body)
+        if method == "POST" and url.endswith("/me/playlists"):
+            import json
+            raw = json.dumps({**json.loads(raw), "public": True}).encode()
+        return status, h, raw
+
+    server_api = connected_api(Settings(), server)
+    server_api.transport = transport
+    created = server_api.create_playlist("DJM · x")
+    assert ("PUT", f"https://api.spotify.com/v1/playlists/{created['id']}") in server.calls

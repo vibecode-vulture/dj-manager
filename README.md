@@ -80,9 +80,9 @@ and press **SPLIT**. Enter the name of the new sub genre, e.g. `speed garage` in
 existing sub genres are split from there.
 
 1. The genre is updated from Spotify first, so recently added songs are included.
-2. A new private Spotify playlist `DJM · house_ukg-garage_speed-garage` is created with
+2. A new Spotify playlist `DJM · house_ukg-garage_speed-garage` is created with
    the selected songs.
-3. A new private Spotify playlist `DJM · house_ukg-garage` is created with the remaining
+3. A new Spotify playlist `DJM · house_ukg-garage` is created with the remaining
    songs. **The previous playlist is not changed or deleted.** DJ Manager never deletes
    Spotify playlists.
 4. Both genres are linked to their new playlists.
@@ -90,6 +90,10 @@ existing sub genres are split from there.
    (`house/ukg-garage/speed-garage/`), and the Traktor collection follows the moves.
    Songs that are stored in another genre's folder stay there, and their other genres are
    not affected. Songs without a Spotify id move along as `LOCAL`.
+
+DJ Manager asks Spotify to create the playlists as non-public, but Spotify has long ignored
+that for playlists created through the API, so they may show up on your profile. Make them
+private in the Spotify app if you want to hide them.
 
 Creating Spotify playlists is also available for genres without a link
 (**+ SPOTIFY PLAYLIST**, with all songs of the genre) and in *Add playlist* (a new, empty
