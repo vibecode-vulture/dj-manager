@@ -42,6 +42,9 @@ def _wait_for_exit(pid: int, timeout: float = 20.0) -> None:
 
 def _free_port(preferred: int) -> int:
     with socket.socket() as sock:
+        if os.name != "nt":
+            # like uvicorn: a port in TIME_WAIT (just after a restart) is usable
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind(("127.0.0.1", preferred))
             return preferred
