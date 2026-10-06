@@ -230,6 +230,8 @@ class Service:
                     job.write(f"FAILED to download: {', '.join(song.artists)} - {song.title} ({song.url})")
             lib.save()
         added = len(to_download) - len(failed)
+        if job.cancel_requested:
+            return f"{pl.key}: {added} downloaded, {len(failed)} left for the next update"
         return f"{pl.key}: {added} downloaded, {len(removed)} removed, {len(failed)} failed"
 
     def submit_update_all(self) -> Job:
@@ -301,7 +303,7 @@ class Service:
             job.write(f"Created {key} -> {pl.folder}")
             result = self.sync_playlist(job, pl) if url else f"{key} created"
             self.write_traktor(job, f"adding {key}")
-            return result
+            return f"Stopped - {result}" if job.cancel_requested else result
         return self.jobs.submit(f"Add playlist {key}", run)
 
     def submit_edit_link(self, key: str, url: str) -> Job:
