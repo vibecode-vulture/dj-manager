@@ -110,3 +110,16 @@ def test_add_playlist_as_new_empty_spotify_playlist(split_env):
     pl = svc.library.playlists["house_ukg"]
     assert server.playlists[playlist_id(pl.spotify_url)]["name"] == "DJM · house_ukg"
     assert pl.spotify_owner == "dj"
+
+
+def test_connect_does_not_wait_behind_downloads(split_env, monkeypatch):
+    import threading
+
+    svc, fake, server, music, nml = split_env
+    gate = threading.Event()
+    busy = svc.jobs.submit("long download", lambda job: gate.wait(10) and "done")
+    monkeypatch.setattr(svc.spotify, "login", lambda log: "DJ")
+    job = wait(svc.submit_spotify_connect(), timeout=5)  # finishes while the download still runs
+    assert job.status == "done" and busy.status == "running"
+    gate.set()
+    wait(busy)

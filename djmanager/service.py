@@ -39,6 +39,8 @@ class Service:
         self.jobs = JobRunner()
         # Analysis runs in its own lane so a long first analysis never blocks downloads.
         self.analysis_jobs = JobRunner(lane="analysis")
+        # Logging in must not wait behind a long download in the main lane.
+        self.account_jobs = JobRunner(lane="account")
         self.analyzer = Analyzer(self.deps, self.settings_store.settings)
         self.updater = Updater(self.settings_store.settings)
         self.library: Library | None = None
@@ -320,19 +322,22 @@ class Service:
         return self.jobs.submit(f"Update {key}", run, dedupe=True)
 
     def find_job(self, job_id: str) -> Job | None:
-        return self.jobs.get(job_id) or self.analysis_jobs.get(job_id)
+        return self.jobs.get(job_id) or self.analysis_jobs.get(job_id) or self.account_jobs.get(job_id)
 
     def cancel_job(self, job_id: str) -> Job | None:
         if self.analysis_jobs.get(job_id):
             # Stopped by the user: no automatic restart until Resume is pressed.
             self.settings_store.update({"analysis_paused": True})
             return self.analysis_jobs.cancel(job_id)
+        if self.account_jobs.get(job_id):
+            return self.account_jobs.cancel(job_id)
         return self.jobs.cancel(job_id)
 
     def shutdown(self) -> None:
         """Stop running work and every child process (called when DJ Manager exits)."""
         self.jobs.cancel_all()
         self.analysis_jobs.cancel_all()
+        self.account_jobs.cancel_all()
         kill_all()
 
     # ------------------------------------------------------------------ analysis
@@ -788,7 +793,7 @@ class Service:
         def run(job: Job) -> str:
             name = self.spotify.login(job.write)
             return f"Spotify account connected: {name}"
-        return self.jobs.submit("Connect Spotify account", run, dedupe=True)
+        return self.account_jobs.submit("Connect Spotify account", run, dedupe=True)
 
     def submit_app_update(self) -> Job:
         return self.jobs.submit("Update DJ Manager", lambda job: self.updater.apply(job.write))
