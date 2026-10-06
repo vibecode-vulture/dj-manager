@@ -6,6 +6,7 @@ import threading
 from pathlib import Path, PurePosixPath
 
 from . import genres
+from .audio import read_info
 from .backup import BackupManager
 from .deps import DependencyManager
 from .jobs import Job, JobCancelled, JobRunner
@@ -197,9 +198,12 @@ class Service:
                             redownload[song.spotify_id].path = rel
                             lib.reindex()
                         else:
+                            # The playlist listing has no album/ISRC; spotdl tags the file with them.
+                            tags = read_info(dst)
                             track = lib.add_track(Track(
-                                id=lib.new_id(), path=rel, title=song.title, artists=song.artists, album=song.album,
-                                duration=song.duration, spotify_id=song.spotify_id, isrc=song.isrc,
+                                id=lib.new_id(), path=rel, title=song.title, artists=song.artists,
+                                album=song.album or tags.album, duration=song.duration or tags.duration,
+                                spotify_id=song.spotify_id, isrc=song.isrc or tags.isrc,
                             ))
                             matched[song.spotify_id] = track.id
                         job.write(f"Downloaded: {rel}")
