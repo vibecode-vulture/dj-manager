@@ -44,6 +44,18 @@ class Track:
     added_at: str = field(default_factory=now_iso)
     # Additional copies of the same song found on disk (relative paths). Never touched.
     duplicates: list[str] = field(default_factory=list)
+    rating: int | None = None          # 1-5 stars from the file's tags
+    rating_traktor: int | None = None  # 1-5 stars from Traktor's collection (fallback)
+    mtime: float = 0.0                 # file modification time when the tags were read
+    bpm: float | None = None
+    key: str | None = None             # e.g. "A minor", formatted for display by analysis.format_key
+    analysis: str = ""                 # "" = pending, "done", "failed"
+    analysis_error: str = ""
+    analysis_engine: str = ""
+
+    @property
+    def stars(self) -> int | None:
+        return self.rating if self.rating is not None else self.rating_traktor
 
     @property
     def artist_line(self) -> str:

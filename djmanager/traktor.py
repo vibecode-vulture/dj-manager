@@ -260,6 +260,15 @@ class Collection:
         self.entries[loc.key.lower()] = entry
         return True
 
+    def ranking(self, path: Path) -> int:
+        """Traktor's rating of a file (0-255, 0 = not rated)."""
+        entry = self.entries.get(self.mapper.key(path).lower())
+        info = entry.find("INFO") if entry is not None else None
+        try:
+            return int(info.get("RANKING", "0")) if info is not None else 0
+        except ValueError:
+            return 0
+
     def move(self, old_path: Path, new_path: Path) -> bool:
         old_key = self.mapper.key(old_path)
         new_loc = self.mapper.location(new_path)

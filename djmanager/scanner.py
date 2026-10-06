@@ -23,6 +23,7 @@ class ScanResult:
     tracks_added: int = 0
     duplicates: int = 0
     memberships_added: int = 0
+    tags_refreshed: int = 0
     skipped_root_files: int = 0
 
     def summary(self) -> str:
@@ -30,6 +31,7 @@ class ScanResult:
             f"{len(self.playlists_created)} new playlists, {self.tracks_added} new tracks, "
             f"{self.memberships_added} playlist entries, {self.duplicates} duplicate files"
             + (f", {self.skipped_root_files} files directly in the music folder ignored" if self.skipped_root_files else "")
+            + (f", ratings re-read from {self.tags_refreshed} changed files" if self.tags_refreshed else "")
         )
 
 
@@ -77,7 +79,14 @@ def scan(lib: Library, log=print) -> ScanResult:
             rel_path = f"{rel_folder}/{name}"
             if lib.is_known_path(rel_path):
                 # Already managed; membership is the library's business (the user may
-                # have removed it from this playlist on purpose).
+                # have removed it from this playlist on purpose). Only re-read the rating
+                # if the file changed (e.g. Traktor wrote a new rating into the tags).
+                known = lib.track_by_path(rel_path)
+                if known is not None:
+                    mtime = (current / name).stat().st_mtime
+                    if mtime != known.mtime:
+                        known.rating, known.mtime = read_info(current / name).rating, mtime
+                        result.tags_refreshed += 1
                 continue
             info = read_info(current / name)
             track = lib.match(info.spotify_id, info.isrc, info.artists, info.title, info.duration)
@@ -94,6 +103,7 @@ def scan(lib: Library, log=print) -> ScanResult:
                     track = lib.add_track(Track(
                         id=lib.new_id(), path=rel_path, title=info.title, artists=info.artists,
                         album=info.album, duration=info.duration, spotify_id=info.spotify_id, isrc=info.isrc,
+                        rating=info.rating, mtime=(current / name).stat().st_mtime,
                     ))
                     result.tracks_added += 1
             if track.id not in playlist.members:

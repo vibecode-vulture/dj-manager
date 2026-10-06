@@ -22,6 +22,32 @@ class AudioInfo:
     duration: float = 0.0
     spotify_id: str | None = None
     isrc: str | None = None
+    rating: int | None = None  # 1-5 stars, None = not rated
+
+
+def popm_to_stars(value: int) -> int | None:
+    """ID3 POPM rating (0-255) to stars. Fits Traktor (51/102/153/204/255) and WMP (1/64/128/196/255)."""
+    if value <= 0:
+        return None
+    for stars, limit in ((1, 64), (2, 128), (3, 196), (4, 255)):
+        if value < limit:
+            return stars
+    return 5
+
+
+def scaled_to_stars(raw: str) -> int | None:
+    """Vorbis/MP4 ratings come as 0-1, 1-5 or 0-100 depending on the program that wrote them."""
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    if value <= 1:
+        value *= 5
+    elif value > 5:
+        value /= 20
+    return max(1, min(5, int(round(value))))
 
 
 def _first(value) -> str:
@@ -69,7 +95,12 @@ def read_info(path: Path) -> AudioInfo:
                 return _first(tags[name])
         return ""
 
-    if any(k.startswith(("TIT2", "TPE1", "TALB", "WOAS", "TSRC")) for k in keys):  # ID3
+    if any(k.startswith(("TIT2", "TPE1", "TALB", "WOAS", "TSRC", "POPM")) for k in keys):  # ID3
+        popm = [tags[k] for k in keys if k.startswith("POPM")]
+        # several programs can each store a rating - prefer Traktor's
+        popm.sort(key=lambda f: "native-instruments" not in (getattr(f, "email", "") or ""))
+        if popm:
+            info.rating = popm_to_stars(int(getattr(popm[0], "rating", 0) or 0))
         info.title = get("TIT2")
         artists = tags["TPE1"].text if "TPE1" in keys else []
         info.artists = [a for a in (str(x).strip() for x in artists) if a]
@@ -86,6 +117,8 @@ def read_info(path: Path) -> AudioInfo:
         info.album = get("\xa9alb")
         info.isrc = get("----:spotdl:ISRC") or None
         url = get("----:spotdl:WOAS", "\xa9cmt")
+        rating = get("rate", "----:com.apple.iTunes:RATING", "----:com.apple.iTunes:rating")
+        info.rating = scaled_to_stars(rating) if rating else None
     else:  # Vorbis comments (flac, ogg, opus) and others
         lower = {k.lower(): k for k in keys}
 
@@ -102,6 +135,8 @@ def read_info(path: Path) -> AudioInfo:
             info.artists = _split_artists(info.artists[0])
         info.album = vget("album")
         info.isrc = vget("isrc") or None
+        rating = vget("fmps_rating", "rating")
+        info.rating = scaled_to_stars(rating) if rating else None
         url = vget("url", "woas", "comment")
 
     info.spotify_id = spotify_id_from_url(url)
