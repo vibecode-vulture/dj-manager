@@ -21,6 +21,8 @@ from pathlib import Path
 from packaging.version import InvalidVersion, Version
 
 from . import paths
+from .jobs import JobCancelled, current_job
+from .procs import release, spawn
 from .util import atomic_write_text, now_iso
 
 MANAGED_PACKAGES = ["spotdl", "yt-dlp"]
@@ -107,19 +109,25 @@ class DependencyManager:
     def is_installed(self) -> bool:
         return self.python.exists()
 
-    def _run(self, args: list[str], log=None, timeout: int = 1800) -> str:
-        proc = subprocess.Popen(
+    def _run(self, args: list[str], log=None) -> str:
+        proc = spawn(
             args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            encoding="utf-8", errors="replace", env=child_env(), **_no_window(),
+            encoding="utf-8", errors="replace", env=child_env(),
         )
         lines = []
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.rstrip()
-            lines.append(line)
-            if log and line:
-                log(line)
-        code = proc.wait(timeout=timeout)
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip()
+                lines.append(line)
+                if log and line:
+                    log(line)
+            code = proc.wait()
+        finally:
+            release(proc)
+        job = current_job.get()
+        if job is not None and job.cancel_requested:
+            raise JobCancelled()
         if code != 0:
             raise DependencyError(f"{' '.join(map(str, args[:4]))} ... failed (exit {code}):\n" + "\n".join(lines[-15:]))
         return "\n".join(lines)
