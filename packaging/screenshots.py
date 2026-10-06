@@ -243,6 +243,10 @@ def main() -> None:
         for artist, title, album, bpm, kind in tracks:
             n += 1
             make_track(args.ffmpeg, music / folder / f"{artist} - {title}.mp3", artist, title, album, bpm, kind, n)
+    # certain duplicates (identical files in another genre) for the Duplicates view
+    for src, dst in (("house/deep-house/Kerri Chandler - Rain.mp3", "house/tech-house"),
+                     ("techno/hard-techno/Dax J - Offender.mp3", "techno/peak-time")):
+        shutil.copy2(music / src, music / dst / Path(src).name)
     print(f"{n} demo tracks in {music}")
 
     env = {**os.environ, "DJMANAGER_HOME": str(home), "PATH": f"{Path(args.ffmpeg).parent}{os.pathsep}{os.environ['PATH']}"}
