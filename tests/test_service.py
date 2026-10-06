@@ -175,3 +175,26 @@ def test_library_persists(env):
     again = Library.load(music)
     assert sorted(again.playlists) == sorted(svc.library.playlists)
     assert len(again.tracks) == len(svc.library.tracks)
+
+
+def test_stop_ends_update_all_after_current_playlist(env):
+    svc, fake, music, nml = env
+    lib = svc.library
+    lib.playlists["techno"].spotify_url = URL_A
+    lib.playlists["techno_acid"].spotify_url = URL_B
+    fake.playlists[URL_A] = [song("klonk", "Surgeon", "Klonk"), song("new1", "Blawan", "Getting Me Down")]
+    fake.playlists[URL_B] = [song("n2", "DJ Pierre", "Box Energy")]
+    fetched = []
+
+    def fetch_then_stop(url, log=print):
+        fetched.append(url)
+        svc.jobs.cancel(svc.jobs.current.id)  # user presses Stop during the first playlist
+        return list(fake.playlists[url])
+
+    fake.fetch_playlist = fetch_then_stop
+    job = wait(svc.submit_update_all())
+    assert job.status == "cancelled"
+    assert len(fetched) == 1  # the second playlist was not started
+    first = lib.playlists["techno_acid" if fetched[0] == URL_B else "techno"]
+    assert first.last_synced  # work done before Stop is kept
+    assert "Stopped after" in job.result

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
+import signal
 import socket
+import sys
 import threading
 import time
 import webbrowser
@@ -60,6 +63,11 @@ def main() -> None:
     cleanup_after_update()
 
     service = Service()
+    # Never leave spotdl/ffmpeg running after DJ Manager is gone.
+    atexit.register(service.shutdown)
+    if hasattr(signal, "SIGHUP"):  # terminal closed
+        signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     app = create_app(service)
     port = _free_port(args.port)
     url = f"http://127.0.0.1:{port}/"

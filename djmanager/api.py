@@ -288,6 +288,13 @@ def create_app(service: Service | None = None) -> FastAPI:
     def jobs():
         return [j.summary(len(j.log)) for j in svc.jobs.recent()]
 
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str):
+        j = svc.cancel_job(job_id)
+        if j is None:
+            raise HTTPException(404, "Job not found")
+        return j.summary(len(j.log))
+
     @app.get("/api/jobs/{job_id}")
     def job(job_id: str, since: int = 0):
         j = svc.jobs.get(job_id)

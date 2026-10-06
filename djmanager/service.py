@@ -8,7 +8,8 @@ from pathlib import Path, PurePosixPath
 from . import genres
 from .backup import BackupManager
 from .deps import DependencyManager
-from .jobs import Job, JobRunner
+from .jobs import Job, JobCancelled, JobRunner
+from .procs import kill_all
 from .library import REMOVED_FOLDER, SOURCE_LOCAL, SOURCE_SPOTIFY, Library, Playlist, Track
 from .scanner import scan
 from .settings import SettingsStore
@@ -151,6 +152,8 @@ class Service:
         job.write(f"--- {pl.key}: fetching {pl.spotify_url}")
         try:
             songs = self.spotdl.fetch_playlist(pl.spotify_url, job.write)
+        except JobCancelled:
+            raise
         except Exception as exc:
             pl.last_error = str(exc)
             lib.save()
@@ -218,9 +221,13 @@ class Service:
                 job.write(f"Removed from Spotify playlist: {t.artist_line + ' - ' + t.title if t else tid}")
             pl.members = new_members
             pl.last_synced = now_iso()
-            pl.last_error = f"{len(failed)} songs could not be downloaded" if failed else ""
-            for song in failed:
-                job.write(f"FAILED to download: {', '.join(song.artists)} - {song.title} ({song.url})")
+            if job.cancel_requested and failed:
+                pl.last_error = f"Stopped - {len(failed)} songs not downloaded yet"
+            else:
+                pl.last_error = f"{len(failed)} songs could not be downloaded" if failed else ""
+            if not job.cancel_requested:
+                for song in failed:
+                    job.write(f"FAILED to download: {', '.join(song.artists)} - {song.title} ({song.url})")
             lib.save()
         added = len(to_download) - len(failed)
         return f"{pl.key}: {added} downloaded, {len(removed)} removed, {len(failed)} failed"
@@ -231,29 +238,44 @@ class Service:
             results, errors = [], 0
             linked = [pl for pl in lib.playlists.values() if pl.spotify_url]
             for i, pl in enumerate(linked):
-                job.progress = i / max(1, len(linked))
+                if job.cancel_requested:
+                    break
+                job.write(f"=== Playlist {i + 1}/{len(linked)}")
                 try:
                     results.append(self.sync_playlist(job, pl))
+                except JobCancelled:
+                    break
                 except Exception as exc:  # keep going with the other playlists
                     errors += 1
                     job.write(f"ERROR {pl.key}: {exc}")
-            job.progress = 1
+            job.progress = None
             if linked and errors < len(linked):
                 self.deps.mark_current("good")
             self.write_traktor(job, "playlist update")
             for line in results:
                 job.write(line)
+            if job.cancel_requested:
+                return f"Stopped after {len(results)} of {len(linked)} playlists - finished downloads were kept"
             return f"{len(linked)} playlists updated" + (f", {errors} failed" if errors else "")
-        return self.jobs.submit("Update all playlists", run)
+        return self.jobs.submit("Update all playlists", run, dedupe=True)
 
     def submit_sync(self, key: str) -> Job:
         def run(job: Job) -> str:
             pl = self._playlist(key)
             result = self.sync_playlist(job, pl)
-            self.deps.mark_current("good")
+            if not job.cancel_requested:
+                self.deps.mark_current("good")
             self.write_traktor(job, f"update of {key}")
-            return result
-        return self.jobs.submit(f"Update {key}", run)
+            return f"Stopped - {result}" if job.cancel_requested else result
+        return self.jobs.submit(f"Update {key}", run, dedupe=True)
+
+    def cancel_job(self, job_id: str) -> Job | None:
+        return self.jobs.cancel(job_id)
+
+    def shutdown(self) -> None:
+        """Stop running work and every child process (called when DJ Manager exits)."""
+        self.jobs.cancel_all()
+        kill_all()
 
     # ------------------------------------------------------------------ playlist management
     def _playlist(self, key: str) -> Playlist:
