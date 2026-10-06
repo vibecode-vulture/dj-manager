@@ -91,10 +91,12 @@ async function pollJob(id) {
   try { job = await api("GET", `/api/jobs/${id}?since=${S.jobs[id]}`); } catch { setTimeout(() => pollJob(id), 1500); return; }
   if (job.log.length) log(job.log);
   S.jobs[id] = job.log_size;
-  $("#console-status").textContent = `${job.title}: ${job.status}`;
-  updateJobIndicator(job.status === "running" || job.status === "queued" ? job : null);
-  if (job.status === "done" || job.status === "failed") {
+  $("#console-status").textContent = `${job.title}: ${job.cancel_requested && job.status === "running" ? "stopping" : job.status}`;
+  if (job.status === "running") updateJobIndicator(job);
+  else if (S.runningJob === id) updateJobIndicator(null);
+  if (["done", "failed", "cancelled"].includes(job.status)) {
     if (job.status === "done") { log([`✔ ${job.result || job.title}`], "ok"); toast(job.result || `${job.title} done`); }
+    else if (job.status === "cancelled") { log([`■ ${job.result || job.title + " stopped"}`], "ok"); toast(job.result || `${job.title} stopped`); }
     else toast(`${job.title} failed: ${job.error}`, true);
     refresh();
     return;
@@ -106,6 +108,18 @@ function updateJobIndicator(job) {
   const ind = $("#ind-job");
   ind.className = "ind " + (job ? "busy" : "");
   $("#job-title").textContent = job ? job.title.toUpperCase() + (job.progress != null ? ` ${Math.round(job.progress * 100)}%` : "") : "IDLE";
+  S.runningJob = job ? job.id : null;
+  const stop = $("#btn-stop");
+  stop.hidden = !job;
+  stop.disabled = !!(job && job.cancel_requested);
+  stop.textContent = job && job.cancel_requested ? "STOPPING…" : "■ STOP";
+}
+
+function stopJob() {
+  const id = S.runningJob;
+  if (!id) return;
+  confirmBox("STOP", "Stop the running task? Songs that finished downloading are kept; the rest are downloaded on the next update.",
+    "Stop", async () => { const j = await act(() => api("POST", `/api/jobs/${id}/cancel`)); if (j) updateJobIndicator(j); });
 }
 
 // ------------------------------------------------------------------ data refresh
@@ -617,6 +631,7 @@ $("#btn-add").addEventListener("click", () => addPlaylist(S.view.type === "genre
 $("#btn-update-all").addEventListener("click", () => runJob(api("POST", "/api/update-all")));
 $("#btn-write").addEventListener("click", () => runJob(api("POST", "/api/traktor/write")));
 $("#btn-app-update").addEventListener("click", applyUpdate);
+$("#btn-stop").addEventListener("click", stopJob);
 $("#btn-console").addEventListener("click", () => {
   const c = $("#console");
   c.classList.toggle("collapsed");
