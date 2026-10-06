@@ -99,7 +99,8 @@ def create_app(service: Service | None = None) -> FastAPI:
             "stats": {
                 "tracks": len(library.tracks), "playlists": len(library.playlists),
                 "removed": len(library.orphans()), "pending_moves": len(library.pending_moves),
-                "duplicates": sum(len(t.duplicates) for t in library.tracks.values()),
+                "duplicates": sum(len(t.duplicates) for t in library.tracks.values()),  # extra files
+                "duplicate_songs": sum(1 for t in library.tracks.values() if t.duplicates),
             } if library else None,
         }
 

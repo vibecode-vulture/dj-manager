@@ -206,7 +206,8 @@ async function refreshState() {
   const st = a.stats || {};
   $("#cnt-collection").textContent = st.tracks ?? "";
   $("#cnt-removed").textContent = st.removed || "";
-  $("#cnt-duplicates").textContent = st.duplicates || "";
+  $("#cnt-duplicates").textContent = st.duplicate_songs || "";
+  $("#cnt-duplicates").title = st.duplicates ? `${st.duplicate_songs} songs with ${st.duplicates} extra copies on disk` : "";
 }
 
 async function refresh() {
@@ -237,8 +238,12 @@ function renderTree() {
     const twisty = n.children.length ? (open ? "▾" : "▸") : "";
     const icon = n.spotify_url ? "♫" : n.has_playlist ? "▪" : "▫";
     const warn = n.last_error ? `<span class="err" title="${esc(n.last_error)}">!</span>` : "";
+    const kind = n.spotify_url ? `Linked to Spotify:\n${n.spotify_url}`
+      : n.has_playlist ? "Songs from the folder only - no Spotify link (LINK adds one)"
+      : "Gray: only sub genres - this folder has no songs of its own.\nIts Traktor playlist contains all songs of its sub genres.";
+    const tip = `${n.key}\n${kind}\n${n.count} songs${n.children.length ? ` (incl. ${n.children.length} sub genres)` : ""}`;
     return `<a class="node ${active ? "active" : ""} ${n.has_playlist ? "" : "implicit"}" data-key="${esc(n.key)}"
-              title="${esc(n.key)}${n.spotify_url ? "\n" + esc(n.spotify_url) : "\nno Spotify link"}">
+              title="${esc(tip)}">
         <span class="twisty" data-toggle="${esc(n.key)}">${twisty}</span><span class="ico">${icon}</span>
         <span class="name">${esc(n.name)}</span>${warn}<span class="cnt">${n.count}</span></a>
       ${n.children.length && open ? `<div class="children">${build(n.children)}</div>` : ""}`;
