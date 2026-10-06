@@ -23,6 +23,11 @@ for line in sys.stdin:
     name = os.path.basename(req["path"])
     if "crash" in name:
         os._exit(1)
+    if "flaky" in name:  # crashes on the first attempt only (marker file next to it)
+        marker = req["path"] + ".seen"
+        if not os.path.exists(marker):
+            open(marker, "w").close()
+            os._exit(1)
     if "bad" in name:
         print("DJM:" + json.dumps({"id": req["id"], "error": "RuntimeError: no audio"}), flush=True)
         continue
@@ -52,12 +57,14 @@ class Deps:
 
 def test_workers_handle_crash_and_errors(tmp_path):
     settings = Settings(analysis_workers=2)
-    items = [(f"t{i}", str(tmp_path / name), ["base"], "") for i, name in enumerate(["a.mp3", "crash.mp3", "bad.mp3", "b.mp3", "c.mp3"])]
+    items = [(f"t{i}", str(tmp_path / name), ["base"], "") for i, name in enumerate(["a.mp3", "crash.mp3", "bad.mp3", "b.mp3", "c.mp3", "flaky.mp3"])]
     results = []
     Analyzer(Deps(), settings).run(items, results.append, lambda line: None,
                                    command=[sys.executable, "-c", FAKE_WORKER])
     by_id = {r.track_id: r for r in results}
-    assert set(by_id) == {"t0", "t1", "t2", "t3", "t4"}  # every song got an answer
+    assert set(by_id) == {"t0", "t1", "t2", "t3", "t4", "t5"}  # every song got exactly one answer
+    assert len(results) == 6
+    assert not by_id["t5"].error and by_id["t5"].answer["bpm"] == 128.0  # retried after one crash
     assert by_id["t1"].error == "analysis crashed on this file"
     assert by_id["t2"].answer["error"].startswith("RuntimeError")
     assert by_id["t0"].answer["bpm"] == 128.0 and by_id["t4"].answer["key"] == "A minor"

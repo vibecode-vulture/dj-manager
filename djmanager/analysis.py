@@ -381,7 +381,10 @@ class Analyzer:
         workers = min(len(items), self.settings.analysis_workers or default_workers())
         todo: queue.Queue = queue.Queue()
         for item in items:
-            todo.put(item)
+            todo.put((*item, 0))  # last field: crashes so far
+        log_dir = paths.data_dir() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        worker_log = open(log_dir / "analysis-worker.log", "a", encoding="utf-8")  # noqa: SIM115
         job = current_job.get()
         errors: list[BaseException] = []
 
@@ -393,7 +396,7 @@ class Analyzer:
             return {}  # process ended
 
         def start():
-            proc = spawn(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            proc = spawn(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=worker_log,
                          text=True, encoding="utf-8", errors="replace", bufsize=1, env=child_env())
             if not read_answer(proc).get("ready"):
                 raise AnalysisError("analysis worker did not start")
@@ -405,7 +408,7 @@ class Analyzer:
             try:
                 while not (job and job.cancel_requested):
                     try:
-                        track_id, path, tasks, out = todo.get_nowait()
+                        track_id, path, tasks, out, crashes = todo.get_nowait()
                     except queue.Empty:
                         return
                     if proc is None or proc.poll() is not None:
@@ -419,10 +422,13 @@ class Analyzer:
                         answer = {}
                     if job and job.cancel_requested:
                         return
-                    if not answer:  # worker crashed on this file - restart it for the next one
-                        on_result(Result(track_id, path, tasks, {}, error="analysis crashed on this file"))
+                    if not answer:  # worker crashed - restart it; retry the file once before failing it
                         release(proc)
                         proc = None
+                        if crashes == 0:
+                            todo.put((track_id, path, tasks, out, 1))
+                        else:
+                            on_result(Result(track_id, path, tasks, {}, error="analysis crashed on this file"))
                         continue
                     on_result(Result(track_id, path, tasks, answer))
             except BaseException as exc:  # noqa: BLE001 - reported by the job
@@ -445,6 +451,7 @@ class Analyzer:
             t.start()
         for t in threads:
             t.join()
+        worker_log.close()
         if job and job.cancel_requested:
             raise JobCancelled()
         if errors:
