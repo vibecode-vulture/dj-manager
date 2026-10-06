@@ -142,13 +142,138 @@ def analyze(path):
     return {"bpm": round(fold(float(bpm)), 2), "key": f"{NAMES[pitch]} {scale}", "confidence": round(score, 2),
             "engine": "librosa"}
 
+# ---------------------------------------------------------------- energy, sound, styles
+# Engine independent (numpy + ONNX), so results are identical on Linux and Windows.
+# The mel spectrogram reproduces Essentia's TensorflowInputMusiCNN exactly (verified
+# against essentia-tensorflow: identical Discogs-EffNet predictions).
+SR16, N_FFT, HOP16, N_MELS = 16000, 512, 256, 96
+
+def _slaney_hz_to_mel(f):
+    f = np.asarray(f, dtype=float)
+    return np.where(f >= 1000.0, 15.0 + np.log(np.maximum(f, 1e-9) / 1000.0) / (np.log(6.4) / 27.0), f / (200.0 / 3))
+
+def _slaney_mel_to_hz(m):
+    m = np.asarray(m, dtype=float)
+    return np.where(m >= 15.0, 1000.0 * np.exp((m - 15.0) * (np.log(6.4) / 27.0)), m * (200.0 / 3))
+
+_FILTERS = None
+def mel_filters():
+    global _FILTERS
+    if _FILTERS is None:
+        edges = _slaney_mel_to_hz(np.linspace(0.0, _slaney_hz_to_mel(SR16 / 2), N_MELS + 2))
+        freqs = np.arange(N_FFT // 2 + 1) * SR16 / N_FFT
+        fb = np.zeros((N_MELS, len(freqs)))
+        for i in range(N_MELS):
+            lo, c, hi = edges[i], edges[i + 1], edges[i + 2]
+            fb[i] = np.maximum(0, np.minimum((freqs - lo) / (c - lo), (hi - freqs) / (hi - c))) * 2.0 / (hi - lo)
+        _FILTERS = fb.T
+    return _FILTERS
+
+def power_frames(audio):
+    padded = np.concatenate([np.zeros(N_FFT // 2), audio.astype(np.float64), np.zeros(N_FFT)])
+    frames = np.lib.stride_tricks.sliding_window_view(padded, N_FFT)[::HOP16][:len(audio) // HOP16 + 2]
+    window = 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(N_FFT) / (N_FFT - 1))
+    return np.abs(np.fft.rfft(frames * window, axis=1)) ** 2
+
+def dct_ortho(x, n):
+    k = np.arange(x.shape[1])
+    basis = np.cos(np.pi / x.shape[1] * (k + 0.5)[None, :] * np.arange(n)[:, None])
+    basis[0] *= 1 / np.sqrt(2)
+    return x @ basis.T * np.sqrt(2 / x.shape[1])
+
+def sound_features(power, mel):
+    """Energy (1-10) and a sound fingerprint for similarity."""
+    fps = SR16 / HOP16
+    rms_db = 10 * np.log10(np.maximum(power.sum(axis=1) / (N_FFT ** 2 / 4), 1e-10))
+    active = rms_db[rms_db > np.percentile(rms_db, 30)]
+    loudness = float(np.mean(active))
+    dynamics = float(np.percentile(rms_db, 95) - np.percentile(rms_db, 10))
+    freqs = np.arange(power.shape[1]) * SR16 / N_FFT
+    total = np.maximum(power.sum(axis=1), 1e-12)
+    centroid = float(np.mean((power * freqs).sum(axis=1) / total))
+    bass = float(np.mean(power[:, freqs < 150].sum(axis=1) / total))
+    flux = np.maximum(0, np.diff(mel, axis=0)).sum(axis=1)
+    thresh = flux.mean() + 0.5 * flux.std()
+    peaks = (flux[1:-1] > thresh) & (flux[1:-1] >= flux[:-2]) & (flux[1:-1] >= flux[2:])
+    onsets = float(peaks.sum() / (len(flux) / fps))
+    clip = lambda v, lo, hi: min(1.0, max(0.0, (v - lo) / (hi - lo)))
+    energy = 1 + 9 * (0.4 * clip(loudness, -24, -8) + 0.35 * clip(onsets, 1.5, 7) + 0.25 * clip(centroid, 300, 1800))
+    mfcc = dct_ortho(mel, 20)
+    timbre = np.r_[mfcc.mean(0), mfcc.std(0), centroid / 1000, bass, onsets, loudness, dynamics, flux.mean()]
+    return round(float(energy), 1), timbre, {"brightness": centroid, "bass": bass, "onsets": onsets,
+                                             "loudness": loudness, "dynamics": dynamics}
+
+_SESSION = None
+def styles(mel):
+    global _SESSION
+    import onnxruntime as ort
+    if _SESSION is None:
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 1  # parallelism comes from several workers
+        _SESSION = ort.InferenceSession(cfg["style_model"], sess_options=opts, providers=["CPUExecutionProvider"])
+    mel = mel.astype(np.float32)
+    if len(mel) < 128:
+        mel = np.pad(mel, ((0, 128 - len(mel)), (0, 0)))
+    patches = np.stack([mel[i:i + 128] for i in range(0, len(mel) - 128 + 1, 62)])
+    out = {o.name: v for o, v in zip(_SESSION.get_outputs(), _SESSION.run(None, {_SESSION.get_inputs()[0].name: patches}))}
+    return out["activations"].mean(axis=0), out["embeddings"].mean(axis=0)
+
+def save_vectors(path, **arrays):
+    import os
+    data = {}
+    if os.path.exists(path):
+        with np.load(path) as old:
+            data = {k: old[k] for k in old.files}
+    data.update({k: np.asarray(v, dtype=np.float16 if np.asarray(v).size > 64 else np.float32) for k, v in arrays.items()})
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp.npz"
+    np.savez(tmp, **data)
+    os.replace(tmp, path)
+
+def extra(req):
+    tasks, res, vectors = req.get("tasks", []), {}, {}
+    audio = decode(req["path"], SR16)
+    power = power_frames(audio)
+    mel = np.log10(1 + 10000 * power @ mel_filters())
+    if "features" in tasks:
+        try:
+            energy, timbre, desc = sound_features(power, mel)
+            res["features"] = {"energy": energy, "desc": desc}
+            vectors["timbre"] = timbre
+        except Exception as exc:
+            res["features"] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    if "styles" in tasks:
+        try:
+            act, emb = styles(mel)
+            top = np.argsort(-act)[:5]
+            res["styles"] = {"top": [[cfg["style_labels"][i], round(float(act[i]), 3)] for i in top]}
+            vectors["styles"], vectors["embedding"] = act, emb
+        except Exception as exc:
+            res["styles"] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    if vectors and req.get("out"):
+        save_vectors(req["out"], **vectors)
+    return res
+
+if cfg.get("style_labels_file"):
+    cfg["style_labels"] = json.load(open(cfg["style_labels_file"], encoding="utf-8"))["classes"]
+
 answer({"ready": True, "engine": "essentia" if es is not None else "librosa"})
 for line in sys.stdin:
     req = json.loads(line)
-    try:
-        res = analyze(req["path"])
-    except Exception as exc:
-        res = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    tasks = req.get("tasks", ["base"])
+    res = {}
+    if "base" in tasks:
+        try:
+            res = analyze(req["path"])
+        except Exception as exc:
+            res = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    if set(tasks) & {"features", "styles"}:
+        try:
+            res.update(extra(req))
+        except Exception as exc:
+            msg = f"{type(exc).__name__}: {exc}"[:300]
+            for task in set(tasks) & {"features", "styles"}:
+                res[task] = {"error": msg}
     res["id"] = req["id"]
     answer(res)
 '''
@@ -158,14 +283,19 @@ class AnalysisError(RuntimeError):
     pass
 
 
+# Discogs-EffNet (MTG, Essentia models; CC BY-NC-ND 4.0 - free for non-commercial use)
+STYLE_MODEL_URL = "https://essentia.upf.edu/models/feature-extractors/discogs-effnet/"
+STYLE_MODEL_FILES = ["discogs-effnet-bsdynamic-1.onnx", "discogs-effnet-bsdynamic-1.json"]
+TASK_LABELS = {"base": "BPM and key", "features": "energy and sound", "styles": "styles (AI)"}
+
+
 @dataclass
 class Result:
     track_id: str
     path: str
-    bpm: float | None = None
-    key: str | None = None
-    engine: str = ""
-    error: str = ""
+    tasks: list[str]
+    answer: dict  # raw worker answer: base fields at top level, "features"/"styles" sub-dicts
+    error: str = ""  # the whole request failed (e.g. worker crashed)
 
 
 def default_workers() -> int:
@@ -178,6 +308,10 @@ class Analyzer:
         self.settings = settings
 
     # ------------------------------------------------------------------ tools
+    @property
+    def model_dir(self):
+        return self.deps.base / "models"
+
     def engine(self) -> str | None:
         versions = self.deps.installed_versions()
         if versions.get("essentia") and not paths.IS_WINDOWS:
@@ -186,24 +320,45 @@ class Analyzer:
             return "librosa"
         return None
 
-    def ensure_tools(self, log) -> str:
-        engine = self.engine()
-        if engine:
-            return engine
-        self.deps.ensure_venv(log)
-        log("Installing the analysis tools (once) ...")
-        for package in analysis_packages() + ["librosa"]:
-            try:
-                self.deps.install_packages([package], log)
-                break
-            except Exception as exc:  # e.g. no Essentia build for this system -> librosa
-                if isinstance(exc, JobCancelled):
-                    raise
-                log(f"{package} could not be installed ({str(exc).splitlines()[0]}), trying the alternative")
+    def styles_ready(self) -> bool:
+        return bool(self.deps.installed_versions().get("onnxruntime")) and all(
+            (self.model_dir / f).exists() for f in STYLE_MODEL_FILES)
+
+    def ensure_tools(self, log, styles: bool = False) -> str:
         engine = self.engine()
         if not engine:
-            raise AnalysisError("No analysis tool could be installed - see the log")
+            self.deps.ensure_venv(log)
+            log("Installing the analysis tools (once) ...")
+            for package in analysis_packages() + ["librosa"]:
+                try:
+                    self.deps.install_packages([package], log)
+                    break
+                except Exception as exc:  # e.g. no Essentia build for this system -> librosa
+                    if isinstance(exc, JobCancelled):
+                        raise
+                    log(f"{package} could not be installed ({str(exc).splitlines()[0]}), trying the alternative")
+            engine = self.engine()
+            if not engine:
+                raise AnalysisError("No analysis tool could be installed - see the log")
+        if styles and not self.styles_ready():
+            self.ensure_style_tools(log)
         return engine
+
+    def ensure_style_tools(self, log) -> None:
+        import urllib.request
+
+        if not self.deps.installed_versions().get("onnxruntime"):
+            log("Installing onnxruntime for the style model ...")
+            self.deps.install_packages(["onnxruntime"], log)
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+        for name in STYLE_MODEL_FILES:
+            target = self.model_dir / name
+            if target.exists():
+                continue
+            log(f"Downloading the style model {name} (Discogs-EffNet by MTG, CC BY-NC-ND 4.0) ...")
+            tmp = target.with_suffix(target.suffix + ".part")
+            urllib.request.urlretrieve(STYLE_MODEL_URL + name, tmp)
+            os.replace(tmp, target)
 
     def worker_command(self) -> list[str]:
         ffmpeg = self.deps.ffmpeg_path()
@@ -211,12 +366,15 @@ class Analyzer:
             raise AnalysisError("ffmpeg not found - download it under Dependencies")
         s = self.settings
         cfg = {"ffmpeg": ffmpeg, "bpm_min": s.bpm_min, "bpm_max": s.bpm_max, "engine": "auto"}
+        if self.styles_ready():
+            cfg["style_model"] = str(self.model_dir / STYLE_MODEL_FILES[0])
+            cfg["style_labels_file"] = str(self.model_dir / STYLE_MODEL_FILES[1])
         return [str(self.deps.python), "-c", WORKER_SCRIPT, json.dumps(cfg)]
 
     # ------------------------------------------------------------------ run
-    def run(self, items: list[tuple[str, str]], on_result: Callable[[Result], None], log,
+    def run(self, items: list[tuple[str, str, list[str], str]], on_result: Callable[[Result], None], log,
             command: list[str] | None = None) -> None:
-        """Analyse (track id, file path) pairs with parallel workers; on_result is called per song."""
+        """Analyse (track id, file, tasks, vector file) items with parallel workers."""
         if not items:
             return
         cmd = command or self.worker_command()
@@ -227,13 +385,6 @@ class Analyzer:
         job = current_job.get()
         errors: list[BaseException] = []
 
-        def start():
-            proc = spawn(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                         text=True, encoding="utf-8", errors="replace", bufsize=1, env=child_env())
-            if not read_answer(proc).get("ready"):
-                raise AnalysisError("analysis worker did not start")
-            return proc
-
         def read_answer(proc) -> dict:
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -241,20 +392,27 @@ class Analyzer:
                     return json.loads(line[4:])
             return {}  # process ended
 
+        def start():
+            proc = spawn(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         text=True, encoding="utf-8", errors="replace", bufsize=1, env=child_env())
+            if not read_answer(proc).get("ready"):
+                raise AnalysisError("analysis worker did not start")
+            return proc
+
         def work():
             token = current_job.set(job)  # register worker processes with the job
             proc = None
             try:
                 while not (job and job.cancel_requested):
                     try:
-                        track_id, path = todo.get_nowait()
+                        track_id, path, tasks, out = todo.get_nowait()
                     except queue.Empty:
                         return
                     if proc is None or proc.poll() is not None:
                         proc = start()
                     try:
                         assert proc.stdin is not None
-                        proc.stdin.write(json.dumps({"id": track_id, "path": path}) + "\n")
+                        proc.stdin.write(json.dumps({"id": track_id, "path": path, "tasks": tasks, "out": out}) + "\n")
                         proc.stdin.flush()
                         answer = read_answer(proc)
                     except (BrokenPipeError, OSError):
@@ -262,12 +420,11 @@ class Analyzer:
                     if job and job.cancel_requested:
                         return
                     if not answer:  # worker crashed on this file - restart it for the next one
-                        on_result(Result(track_id, path, error="analysis crashed on this file"))
+                        on_result(Result(track_id, path, tasks, {}, error="analysis crashed on this file"))
                         release(proc)
                         proc = None
                         continue
-                    on_result(Result(track_id, path, bpm=answer.get("bpm"), key=answer.get("key"),
-                                     engine=answer.get("engine", ""), error=answer.get("error", "")))
+                    on_result(Result(track_id, path, tasks, answer))
             except BaseException as exc:  # noqa: BLE001 - reported by the job
                 if not isinstance(exc, JobCancelled):
                     errors.append(exc)

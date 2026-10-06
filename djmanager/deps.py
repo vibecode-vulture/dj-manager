@@ -27,7 +27,7 @@ from .util import atomic_write_text, now_iso
 
 MANAGED_PACKAGES = ["spotdl", "yt-dlp"]
 # Installed on demand for BPM/key analysis (see analysis.py)
-OPTIONAL_PACKAGES = ["essentia", "librosa"]
+OPTIONAL_PACKAGES = ["essentia", "librosa", "onnxruntime"]
 ALL_PACKAGES = MANAGED_PACKAGES + OPTIONAL_PACKAGES
 GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 # Standalone CPython for packaged builds (which have no interpreter to create a venv with).

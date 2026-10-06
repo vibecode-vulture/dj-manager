@@ -45,6 +45,7 @@ def track_row(lib: Library, track: Track, source: str | None = None, playlist_ke
         "rating": track.stars, "rating_source": "file" if track.rating is not None else "traktor" if track.rating_traktor else "",
         "bpm": track.bpm, "key": format_key(track.key, notation), "key_sort": key_sort(track.key),
         "analysis": track.analysis, "analysis_error": track.analysis_error,
+        "energy": track.energy, "styles": [[label.split("---")[-1], p] for label, p in track.styles[:3]],
     }
 
 
@@ -198,6 +199,10 @@ def create_app(service: Service | None = None) -> FastAPI:
         with library.lock:
             return [row(library, t) for t in library.tracks.values() if t.duplicates]
 
+    @app.get("/api/genre/{key}/recommendations")
+    def recommendations(key: str):
+        return svc.recommendations(key)
+
     @app.get("/api/playlists/{key}/blacklist")
     def blacklist(key: str):
         pl = lib().find_playlist(key)
@@ -323,7 +328,7 @@ def create_app(service: Service | None = None) -> FastAPI:
 
     @app.post("/api/analysis")
     def analysis(data: dict = Body(default={})):
-        return job_ref(svc.submit_analysis(data.get("mode", "pending"), manual=True))
+        return job_ref(svc.submit_analysis(data.get("mode", "pending"), manual=True, tasks=data.get("tasks")))
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str):

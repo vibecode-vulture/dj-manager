@@ -52,21 +52,21 @@ class Deps:
 
 def test_workers_handle_crash_and_errors(tmp_path):
     settings = Settings(analysis_workers=2)
-    items = [(f"t{i}", str(tmp_path / name)) for i, name in enumerate(["a.mp3", "crash.mp3", "bad.mp3", "b.mp3", "c.mp3"])]
+    items = [(f"t{i}", str(tmp_path / name), ["base"], "") for i, name in enumerate(["a.mp3", "crash.mp3", "bad.mp3", "b.mp3", "c.mp3"])]
     results = []
     Analyzer(Deps(), settings).run(items, results.append, lambda line: None,
                                    command=[sys.executable, "-c", FAKE_WORKER])
     by_id = {r.track_id: r for r in results}
     assert set(by_id) == {"t0", "t1", "t2", "t3", "t4"}  # every song got an answer
     assert by_id["t1"].error == "analysis crashed on this file"
-    assert by_id["t2"].error.startswith("RuntimeError")
-    assert by_id["t0"].bpm == 128.0 and by_id["t4"].key == "A minor"
+    assert by_id["t2"].answer["error"].startswith("RuntimeError")
+    assert by_id["t0"].answer["bpm"] == 128.0 and by_id["t4"].answer["key"] == "A minor"
 
 
 @pytest.fixture
 def analysis_env(env, monkeypatch):  # noqa: F811
     svc, fake, music, nml = env
-    monkeypatch.setattr(svc.analyzer, "ensure_tools", lambda log: "fake")
+    monkeypatch.setattr(svc.analyzer, "ensure_tools", lambda log, styles=False: "fake")
     monkeypatch.setattr(svc.analyzer, "worker_command", lambda: [sys.executable, "-c", FAKE_WORKER])
     return svc
 
@@ -77,7 +77,9 @@ def test_stop_pauses_and_resume_continues(analysis_env, monkeypatch):
     monkeypatch.setenv("FAKE_DELAY", "0.4")
     svc.settings.analysis_workers = 1
     job = svc.submit_analysis(manual=True)
+    end = time.time() + 20
     while sum(t.analysis == "done" for t in lib.tracks.values()) < 1:
+        assert time.time() < end, "analysis made no progress"
         time.sleep(0.02)
     svc.cancel_job(job.id)  # user presses Stop
     wait(job)
@@ -126,12 +128,13 @@ def test_real_engine_on_synthetic_signal(tmp_path, engine):
     cfg = {"ffmpeg": ffmpeg, "bpm_min": 70, "bpm_max": 185, "engine": engine}
     results = []
     Analyzer(Deps(), Settings(analysis_workers=1)).run(
-        [("x", str(wav))], results.append, lambda line: None,
+        [("x", str(wav), ["base"], "")], results.append, lambda line: None,
         command=[os.environ["DJM_ANALYSIS_PYTHON"], "-c", WORKER_SCRIPT, json.dumps(cfg)])
-    assert not results[0].error, results[0].error
-    assert results[0].engine == engine
-    assert abs(results[0].bpm - 128) < 1.0
-    assert results[0].key == "A minor"
+    ans = results[0].answer
+    assert not results[0].error and not ans.get("error"), ans
+    assert ans["engine"] == engine
+    assert abs(ans["bpm"] - 128) < 1.0
+    assert ans["key"] == "A minor"
 
 
 def test_rating_scales():

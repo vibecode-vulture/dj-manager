@@ -47,6 +47,16 @@ class Settings:
     bpm_min: int = 70
     bpm_max: int = 185
     key_notation: str = "openkey"  # openkey | camelot | musical
+
+    # Split recommendations (optional, off by default)
+    rec_enabled: bool = False
+    rec_bpm: bool = True
+    rec_energy: bool = True
+    rec_timbre: bool = True
+    rec_styles: bool = False
+    features_auto: bool = True     # energy/sound analysed together with BPM/key for new songs
+    styles_auto: bool = False      # AI styles only when requested
+    rec_min_group: int = 6         # smallest group worth suggesting
     # GitHub "owner/repo" with DJ Manager releases; empty = the repo the build came from
     update_repo: str = ""
     check_app_updates: bool = True

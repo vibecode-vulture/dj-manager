@@ -6,7 +6,8 @@ import threading
 from pathlib import Path, PurePosixPath
 
 from . import genres
-from .analysis import Analyzer, Result, format_key
+from .analysis import STYLE_MODEL_FILES, TASK_LABELS, Analyzer, Result, format_key
+from .recommend import RecommendError, run_recommendations
 from .audio import popm_to_stars, read_info
 from .backup import BackupManager
 from .deps import DependencyManager
@@ -339,50 +340,96 @@ class Service:
         members = lib.member_ids()
         return [t for t in lib.tracks.values() if t.id in members]
 
+    STATUS_FIELD = {"base": "analysis", "features": "features_status", "styles": "styles_status"}
+
+    def _enabled_tasks(self) -> set[str]:
+        """Analysis tasks that are switched on at all."""
+        s = self.settings
+        tasks = {"base"}
+        if s.rec_enabled and (s.rec_energy or s.rec_timbre):
+            tasks.add("features")
+        if s.rec_enabled and s.rec_styles:
+            tasks.add("styles")
+        return tasks
+
+    def _auto_tasks(self) -> set[str]:
+        """Tasks that run by themselves for new songs (the others only on request)."""
+        s = self.settings
+        enabled = self._enabled_tasks()
+        return {t for t in enabled if t == "base" or (t == "features" and s.features_auto)
+                or (t == "styles" and s.styles_auto)}
+
     def analysis_status(self) -> dict:
         lib = self.library
-        counts = {"done": 0, "pending": 0, "failed": 0}
+        counts = {task: {"done": 0, "pending": 0, "failed": 0} for task in self.STATUS_FIELD}
         if lib:
             with lib.lock:
                 for track in self._analysable(lib):
-                    counts["done" if track.analysis == "done" else "failed" if track.analysis == "failed" else "pending"] += 1
+                    for task, attr in self.STATUS_FIELD.items():
+                        value = getattr(track, attr)
+                        counts[task]["done" if value == "done" else "failed" if value == "failed" else "pending"] += 1
         current = self.analysis_jobs.current
-        return {**counts, "paused": self.settings.analysis_paused, "auto": self.settings.analysis_auto,
+        enabled, auto = self._enabled_tasks(), self._auto_tasks()
+        return {**counts["base"], "tasks": {t: {**counts[t], "enabled": t in enabled, "auto": t in auto}
+                                            for t in counts},
+                "pending_auto": sum(counts[t]["pending"] for t in auto),
+                "paused": self.settings.analysis_paused, "auto": self.settings.analysis_auto,
                 "engine": self.analyzer.engine() if self.deps.is_installed() else None,
+                "styles_ready": self.analyzer.styles_ready() if self.deps.is_installed() else False,
                 "job": current.summary(len(current.log)) if current else None}
+
+    def _pending_tasks(self, track: Track, wanted: set[str]) -> list[str]:
+        return [t for t in ("base", "features", "styles") if t in wanted and getattr(track, self.STATUS_FIELD[t]) == ""]
 
     def auto_analyze(self) -> Job | None:
         """Start analysing new songs unless the user switched it off or paused it."""
         lib = self.library
         if not lib or not self.settings.analysis_auto or self.settings.analysis_paused or not self.deps.is_installed():
             return None
+        wanted = self._auto_tasks()
         with lib.lock:
-            pending = any(t.analysis == "" for t in self._analysable(lib))
+            pending = any(self._pending_tasks(t, wanted) for t in self._analysable(lib))
         return self.submit_analysis() if pending else None
 
-    def submit_analysis(self, mode: str = "pending", manual: bool = False) -> Job:
-        """mode: 'pending' (resume), 'failed' (retry failed songs) or 'all' (analyse everything again)."""
+    def submit_analysis(self, mode: str = "pending", manual: bool = False, tasks: list[str] | None = None) -> Job:
+        """mode: 'pending' (resume), 'failed' (retry) or 'all' (analyse again).
+
+        Without tasks, everything that runs automatically is done; with tasks (e.g.
+        ['styles']) exactly those are run for the whole collection, on request.
+        """
         lib = self.require_library()
+        requested = set(tasks or [])
+        if requested - set(self.STATUS_FIELD):
+            raise ServiceError("Unknown analysis")
+        if requested - self._enabled_tasks():
+            raise ServiceError("Enable this analysis under Settings > Split recommendations first")
         if manual:
             self.settings_store.update({"analysis_paused": False})
+        wanted = requested or self._auto_tasks()
         if mode in ("failed", "all"):
             with lib.lock:
                 for track in self._analysable(lib):
-                    if mode == "all" or track.analysis == "failed":
-                        track.analysis, track.analysis_error = "", ""
+                    for task in (requested or {"base"}):
+                        attr = self.STATUS_FIELD[task]
+                        if mode == "all" or getattr(track, attr) == "failed":
+                            setattr(track, attr, "")
                 lib.save()
-        return self.analysis_jobs.submit("Analyse BPM and key", self._job_analysis, dedupe=True)
+        title = "Analyse " + " + ".join(TASK_LABELS[t] for t in ("base", "features", "styles") if t in wanted)
+        return self.analysis_jobs.submit(title, lambda job: self._job_analysis(job, wanted), dedupe=True)
 
-    def _job_analysis(self, job: Job) -> str:
+    def _job_analysis(self, job: Job, wanted: set[str]) -> str:
         lib = self.require_library()
-        engine = self.analyzer.ensure_tools(job.write)
+        engine = self.analyzer.ensure_tools(job.write, styles="styles" in wanted)
         with lib.lock:
-            todo = [(t.id, str(lib.abs_path(t.path))) for t in self._analysable(lib)
-                    if t.analysis == "" and lib.abs_path(t.path).exists()]
+            todo = []
+            for t in self._analysable(lib):
+                tasks = self._pending_tasks(t, wanted)
+                if tasks and lib.abs_path(t.path).exists():
+                    todo.append((t.id, str(lib.abs_path(t.path)), tasks, str(lib.vector_file(t.id))))
         total, done, failed = len(todo), 0, 0
         if not total:
             return "All songs are analysed"
-        job.write(f"{total} songs to analyse ({engine})")
+        job.write(f"{total} songs to analyse ({engine}): " + ", ".join(TASK_LABELS[t] for t in sorted(wanted)))
         notation = self.settings.key_notation
         unsaved = 0
 
@@ -392,16 +439,38 @@ class Service:
                 track = lib.tracks.get(res.track_id)
                 if track is None:
                     return
-                if res.error and str(lib.abs_path(track.path)) != res.path:
-                    pass  # moved while queued (e.g. split) - stays pending for the next run
-                elif res.error:
-                    track.analysis, track.analysis_error = "failed", res.error
+                moved = str(lib.abs_path(track.path)) != res.path  # e.g. split while queued
+                ans, problems, parts = res.answer, [], []
+                for task in res.tasks:
+                    attr = self.STATUS_FIELD[task]
+                    error = res.error or (ans.get("error") if task == "base" else (ans.get(task) or {}).get("error", ""))
+                    if task != "base" and not res.error and task not in ans:
+                        error = "no result"
+                    if error:
+                        if not moved:  # moved files stay pending for the next run
+                            setattr(track, attr, "failed")
+                            problems.append(f"{TASK_LABELS[task]}: {error}")
+                        continue
+                    setattr(track, attr, "done")
+                    if task == "base":
+                        track.bpm, track.key, track.analysis_engine = ans.get("bpm"), ans.get("key"), ans.get("engine", "")
+                        track.analysis_error = ""
+                        parts.append(f"{track.bpm:6.1f} BPM  {format_key(track.key, notation):>3}")
+                    elif task == "features":
+                        track.energy = ans["features"].get("energy")
+                        parts.append(f"energy {track.energy}")
+                    elif task == "styles":
+                        track.styles = ans["styles"].get("top", [])
+                        if track.styles:
+                            parts.append(track.styles[0][0].split("---")[-1])
+                if problems:
                     failed += 1
-                    job.write(f"FAILED {track.artist_line} - {track.title}: {res.error}")
+                    track.extra_error = "; ".join(problems)
+                    if "base" in res.tasks and track.analysis == "failed":
+                        track.analysis_error = track.extra_error
+                    job.write(f"FAILED {track.artist_line} - {track.title}: {track.extra_error}")
                 else:
-                    track.bpm, track.key, track.analysis_engine = res.bpm, res.key, res.engine
-                    track.analysis, track.analysis_error = "done", ""
-                    job.write(f"{res.bpm:6.1f} BPM  {format_key(res.key, notation):>3}  {track.artist_line} - {track.title}")
+                    job.write(f"{'  '.join(parts)}  {track.artist_line} - {track.title}")
                 done += 1
                 unsaved += 1
                 job.progress = done / total
@@ -420,7 +489,34 @@ class Service:
             return f"Paused - {done} of {total} analysed, {total - done} left (Resume in Settings > Analysis)"
         return f"{done - failed} songs analysed" + (f", {failed} failed" if failed else "")
 
-    # ------------------------------------------------------------------ playlist management
+    # ------------------------------------------------------------------ split recommendations
+    def recommendations(self, key: str) -> dict:
+        """Suggested groups of the genre's own songs for a new sub genre (nothing is changed)."""
+        s = self.settings
+        if not s.rec_enabled:
+            raise ServiceError("Split recommendations are switched off (Settings > Split recommendations)")
+        lib = self.require_library()
+        pl = self._playlist(key)
+        with lib.lock:
+            tracks = [lib.tracks[t] for t in pl.members if t in lib.tracks and lib.abs_path(lib.tracks[t].path).exists()]
+            payload_tracks = [{"id": t.id, "bpm": t.bpm, "energy": t.energy, "file": str(lib.vector_file(t.id))}
+                              for t in tracks]
+            coverage = {"songs": len(tracks), "bpm": sum(t.analysis == "done" for t in tracks),
+                        "features": sum(t.features_status == "done" for t in tracks),
+                        "styles": sum(t.styles_status == "done" for t in tracks)}
+        signals = {"bpm": s.rec_bpm, "energy": s.rec_energy, "timbre": s.rec_timbre, "styles": s.rec_styles}
+        labels = self.analyzer.model_dir / STYLE_MODEL_FILES[1]
+        result = {"suggestions": [], "maps": {}}
+        if len(tracks) >= 2 * s.rec_min_group:
+            try:
+                result = run_recommendations(self.deps, {
+                    "tracks": payload_tracks, "signals": signals, "min_group": s.rec_min_group,
+                    "labels_file": str(labels) if labels.exists() else None})
+            except RecommendError as exc:
+                raise ServiceError(str(exc)) from exc
+        return {**result, "coverage": coverage, "signals": signals, "min_group": s.rec_min_group,
+                "tasks": self.analysis_status()["tasks"]}
+
     def _playlist(self, key: str) -> Playlist:
         pl = self.require_library().find_playlist(key)
         if pl is None:

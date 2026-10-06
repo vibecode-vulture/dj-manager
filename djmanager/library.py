@@ -52,6 +52,13 @@ class Track:
     analysis: str = ""                 # "" = pending, "done", "failed"
     analysis_error: str = ""
     analysis_engine: str = ""
+    # Split recommendations (optional): energy + sound fingerprint, AI styles.
+    # The vectors themselves live in .djmanager/features/<id>.npz.
+    energy: float | None = None        # 1-10
+    features_status: str = ""          # "" pending, "done", "failed"
+    styles_status: str = ""
+    styles: list = field(default_factory=list)  # top styles [[label, probability], ...]
+    extra_error: str = ""
 
     @property
     def stars(self) -> int | None:
@@ -313,6 +320,9 @@ class Library:
         if removed:
             self.reindex()
         return removed
+
+    def vector_file(self, track_id: str) -> Path:
+        return self.root / META_FOLDER / "features" / f"{track_id}.npz"
 
     def record_move(self, old_rel: str, new_rel: str) -> None:
         # Collapse chains a->b, b->c into a->c.
