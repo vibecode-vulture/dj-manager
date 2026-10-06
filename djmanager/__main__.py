@@ -77,7 +77,7 @@ def main() -> None:
     while not server.started:
         time.sleep(0.05)
     service.startup()
-    print(f"DJ Manager running at {url}")
+    print(f"DJ Manager running at {url}", flush=True)
 
     if args.no_open:
         thread.join()
