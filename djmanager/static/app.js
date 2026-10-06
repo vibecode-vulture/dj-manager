@@ -1013,6 +1013,22 @@ $("#btn-write").addEventListener("click", () => runJob(api("POST", "/api/traktor
 $("#btn-app-update").addEventListener("click", applyUpdate);
 $("#btn-stop").addEventListener("click", stopJob);
 $("#btn-analysis").addEventListener("click", analysisButton);
+$("#btn-copy-log").addEventListener("click", async () => {
+  const pre = $("#log");
+  const text = pre.innerText;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {  // older webviews: copy via a selection
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.execCommand("copy");
+    sel.removeAllRanges();
+  }
+  toast(`Log copied (${text.split("\n").length - 1} lines)`);
+});
 $("#btn-console").addEventListener("click", () => {
   const c = $("#console");
   c.classList.toggle("collapsed");

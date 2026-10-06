@@ -86,8 +86,9 @@ def main() -> None:
         try:
             import webview  # pywebview
 
+            # text_select: pywebview disables selecting text by default (log, paths, errors)
             webview.create_window("DJ Manager", url, width=1400, height=880, min_size=(960, 600),
-                                  background_color="#161616")
+                                  background_color="#161616", text_select=True)
             webview.start()
             server.should_exit = True
             return

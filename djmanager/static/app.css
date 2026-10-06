@@ -191,7 +191,7 @@ table.simple { width: 100%; border-collapse: collapse; }
 .console-head { display: flex; gap: 10px; align-items: center; padding: 0 8px 0 0; }
 .console-head .section-label { padding: 6px 10px; }
 #console-status { color: var(--muted); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#log { margin: 0; height: 150px; overflow: auto; padding: 4px 10px 8px; font: 11px/1.5 var(--mono); color: var(--text-2); white-space: pre-wrap; background: var(--bg-2); }
+#log { user-select: text; margin: 0; height: 150px; overflow: auto; padding: 4px 10px 8px; font: 11px/1.5 var(--mono); color: var(--text-2); white-space: pre-wrap; background: var(--bg-2); }
 .console.collapsed #log { display: none; }
 #log .e { color: var(--red); }
 #log .ok { color: var(--active); }
