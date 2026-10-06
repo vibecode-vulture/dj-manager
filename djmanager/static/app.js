@@ -291,7 +291,7 @@ async function render() {
       case "recommend": return await renderRecommend(deck, view);
       case "collection": return await renderList(deck, view, "/api/collection", "Track Collection", "All tracks managed by DJ Manager, each stored once on disk.");
       case "removed": return await renderList(deck, view, "/api/removed", "Removed", "Tracks that are in no genre anymore. They stay on disk (moved to _removed/ when their playlist was removed) - delete the files yourself and they disappear from this list.");
-      case "duplicates": return await renderList(deck, view, "/api/duplicates", "Duplicates", "Songs found more than once on disk. DJ Manager uses the first file; the extra copies listed here can be deleted manually.");
+      case "duplicates": return await renderDuplicates(deck, view);
       case "settings": return renderSettings(view);
       case "deps": return await renderDeps(view);
       case "backups": return await renderBackups(view);
@@ -356,8 +356,7 @@ async function renderGenre(deck, view) {
 async function renderList(deck, view, url, title, help) {
   S.rows = await api("GET", url);
   deck.innerHTML = deckHtml({ letter: title[0], orange: title !== "Track Collection", title: esc(title), sub: esc(help), meters: [[S.rows.length, "TRACKS"]] });
-  const dupes = S.view.type === "duplicates";
-  renderTable(view, { showPlaylist: !dupes, showDuplicates: dupes, showPath: S.view.type !== "collection" });
+  renderTable(view, { showPlaylist: true, showPath: S.view.type !== "collection" });
 }
 
 const COLUMNS = {
@@ -388,8 +387,9 @@ function renderTable(view, opts) {
   S.visible = rows;
   const th = (col, label, cls = "") => `<th class="${cls}" data-sort="${col}">${label}${S.sort.col === col ? (S.sort.dir > 0 ? " ▲" : " ▼") : ""}</th>`;
   const STATUS_LABEL = { failed: "DOWNLOAD FAILED", unavailable: "NOT ON YOUTUBE" };
+  const elsewhere = (r) => r.stored_in ? ` <span class="badge elsewhere" title="Stored once on disk, in ${esc(r.stored_in)}/">IN OTHER GENRE</span>` : "";
   const badge = (r) => {
-    if (r.status === "ok") return r.source === "spotify" ? `<span class="badge spotify">SPOTIFY</span>` : "";
+    if (r.status === "ok") return (r.source === "spotify" ? `<span class="badge spotify">SPOTIFY</span>` : "") + elsewhere(r);
     const label = `<span class="badge ${r.status}" title="${esc(r.download_error || "")}">${STATUS_LABEL[r.status] || r.status.toUpperCase()}</span>`;
     return STATUS_LABEL[r.status]
       ? `${label} <button class="btn tiny" data-link="${esc(r.id)}" title="Use a file you downloaded yourself">LINK FILE…</button>`
@@ -405,7 +405,6 @@ function renderTable(view, opts) {
       ${th("rating", "RATING", "rating")}${th("bpm", "BPM", "bpm")}${th("key", "KEY", "key")}
       ${th("duration", "TIME", "time")}${th("status", "STATUS", "st")}
       ${opts.showPlaylist ? th("playlists", "PLAYLISTS") : ""}${opts.showPath ? th("path", "FILE") : ""}
-      ${opts.showDuplicates ? "<th>DUPLICATE FILES</th>" : ""}
     </tr></thead><tbody>
     ${rows.map((r, i) => `<tr data-id="${esc(r.id)}" class="st-${r.status} ${S.selected.has(r.id) ? "sel" : ""}" title="${esc(r.path)}">
       <td class="num">${i + 1}</td><td>${esc(r.title)}</td><td>${esc(r.artists)}</td><td>${esc(r.album)}</td>
@@ -413,7 +412,6 @@ function renderTable(view, opts) {
       <td class="time">${fmtTime(r.duration)}</td><td class="st">${badge(r)}</td>
       ${opts.showPlaylist ? `<td>${r.playlists.map((p) => `<span class="pl-chip">${esc(p)}</span>`).join("")}</td>` : ""}
       ${opts.showPath ? `<td class="mono">${esc(r.path)}</td>` : ""}
-      ${opts.showDuplicates ? `<td class="mono">${r.duplicates.map(esc).join("<br>")}</td>` : ""}
     </tr>`).join("")}</tbody></table>`
     : `<div class="empty">No tracks${f ? " match the search" : ""}.</div>`}`;
 
@@ -847,6 +845,64 @@ async function renderBackups(view) {
       <p class="help">Only needed if DJ Manager's own data is broken. Files moved since the backup are not moved back.</p>` : ""}`,
     [{ label: "Cancel" }, { label: "Restore", cls: "orange", action: (r) => runJob(api("POST", `/api/backups/${b.dataset.restore}/restore`, { restore_library: !!$("#restore-lib", r)?.checked })) }]);
   }));
+}
+
+// ------------------------------------------------------------------ duplicates
+const fmtMB = (b) => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`;
+
+function copyLine(c, extra = "") {
+  const q = c.lossless ? "lossless" : c.bitrate ? `${c.bitrate} kbit/s` : "";
+  const facts = [q, c.duration ? fmtTime(c.duration) : "", c.cues ? `Traktor: ${c.cues} cues/grid` : "", fmtMB(c.size)].filter(Boolean).join(" · ");
+  return `<div class="dup-file">${extra}<span class="mono">${esc(c.path)}</span><i>${esc(facts)}${c.evidence ? " · " + esc(c.evidence) : ""}</i></div>`;
+}
+
+async function renderDuplicates(deck, view) {
+  const rep = await api("GET", "/api/duplicates");
+  if (S.view.type !== "duplicates") return;
+  const uncertain = rep.groups.filter((g) => g.uncertain.length);
+  deck.innerHTML = deckHtml({
+    letter: "D", orange: true, title: "Duplicates",
+    sub: "The same song stored more than once on disk. Cleaning up keeps one file per song (the one with Traktor cue points, else the best quality) "
+      + "and moves the other copies to the system trash. Every genre keeps the song; Traktor references are updated.",
+    meters: [[rep.songs, "SONGS"], [rep.certain_files + rep.uncertain_files, "EXTRA COPIES"], [fmtMB(rep.certain_bytes), "TO FREE"]],
+    tools: rep.certain_files ? `<button class="btn orange" id="dup-clean">🗑 MOVE ${rep.certain_files} DUPLICATES TO TRASH</button>` : "",
+  });
+  const groupHtml = (g, mode) => `<div class="dup-group">
+      <div class="dup-song"><b>${esc(g.title)}</b> <span class="help">${esc(g.artists)}</span>
+        ${g.playlists.map((p) => `<span class="pl-chip">${esc(p)}</span>`).join("")}</div>
+      ${copyLine(g.keep, `<span class="badge spotify" title="${esc(g.reason)}">KEEP</span>`)}
+      <div class="help dup-reason">kept: ${esc(g.reason)}</div>
+      ${mode === "certain"
+        ? g.remove.map((c) => copyLine(c, `<span class="badge failed">TRASH</span>`)).join("")
+        : g.uncertain.map((c) => copyLine(c, `<label class="dup-pick"><input type="checkbox" data-uncertain="${esc(c.path)}" data-track="${esc(g.track_id)}"> TRASH?</label>`)).join("")}
+    </div>`;
+  const certain = rep.groups.filter((g) => g.remove.length);
+  view.innerHTML = `<div class="panel dup">
+    ${rep.songs ? "" : `<div class="empty"><h3>No duplicates</h3>Every song is stored once.</div>`}
+    ${certain.length ? `<h2>CERTAIN DUPLICATES · ${certain.length} SONGS</h2>
+      <p class="help">Same Spotify id, same ISRC, or an identical file. These copies are moved to the trash with the button above.</p>
+      ${certain.map((g) => groupHtml(g, "certain")).join("")}` : ""}
+    ${uncertain.length ? `<h2>MAYBE DUPLICATES · ${uncertain.length} SONGS</h2>
+      <p class="help">Only artist and title match - possibly another version (e.g. Extended Mix). Compare the durations and tick the copies that really are duplicates.</p>
+      <p><button class="btn orange" id="dup-clean-selected" disabled>🗑 MOVE SELECTED TO TRASH</button></p>
+      ${uncertain.map((g) => groupHtml(g, "uncertain")).join("")}` : ""}
+  </div>`;
+  const run = (body, text) => confirmBox("CLEAN UP DUPLICATES", text, "Move to trash",
+    () => runJob(api("POST", "/api/duplicates/clean", body)), "orange");
+  const btn = $("#dup-clean");
+  if (btn) btn.addEventListener("click", () => run({},
+    `Move <b>${rep.certain_files}</b> certain duplicate copies (${fmtMB(rep.certain_bytes)}) to the system trash?<br><br>
+     One file per song is kept and checked first. Every genre keeps the song (shown as <span class="badge elsewhere">IN OTHER GENRE</span> where the file lives elsewhere),
+     Traktor playlists - also your own - point to the kept file, and updates do not download the songs again.
+     You can restore the files from the trash. Close Traktor first.`));
+  const picks = $$("[data-uncertain]", view);
+  const sel = $("#dup-clean-selected");
+  picks.forEach((x) => x.addEventListener("change", () => { sel.disabled = !picks.some((p) => p.checked); }));
+  if (sel) sel.addEventListener("click", () => {
+    const chosen = picks.filter((p) => p.checked);
+    run({ track_ids: [...new Set(chosen.map((p) => p.dataset.track))], uncertain: chosen.map((p) => p.dataset.uncertain) },
+      `Move the <b>${chosen.length}</b> selected copies to the trash? Make sure they are the same recording - the kept file of each song is shown in green.`);
+  });
 }
 
 // ------------------------------------------------------------------ split recommendations

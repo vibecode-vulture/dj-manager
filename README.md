@@ -60,7 +60,7 @@ Traktor and refuses to write while it is open.
 | `LOCAL` | Track in a linked playlist that is not part of the Spotify playlist (imported or kept after a link change) |
 | Blacklist | Songs removed manually from a playlist. They are not added again by the next update |
 | Removed | Tracks that are in no genre anymore. They are never deleted; delete the file yourself and they disappear |
-| Duplicates | Copies of the same song found during import. The first file found is used and the others are listed |
+| Duplicates | Copies of the same song found during import. The library uses one file; the others can be moved to the trash (see below) |
 | Split | Selected songs of a genre become a new sub genre, with new Spotify playlists for both |
 | Analysis | BPM and key of every song, computed by DJ Manager (stoppable, resumes where it stopped) |
 | Recommendations | Optional suggestions which songs of a genre could form a new sub genre |
@@ -71,6 +71,27 @@ artist + title (± 3 s duration).
 **Removing a playlist** deletes its Traktor playlist and folder. Files still used by other
 playlists move into one of their folders, and the rest move to `<music>/_removed/<key>/`.
 Moves are applied to the Traktor collection entries, so cue points and beat grids survive.
+
+## Cleaning up duplicates
+
+Songs that exist several times on disk (e.g. downloaded into several playlist folders before)
+are stored once in the library: every genre where a copy was found contains the song, and
+Traktor's genre playlists point to one file. The **Duplicates** view shows, per song, which
+file is kept and which copies can go. This is the only place where DJ Manager removes files.
+
+- **Certain duplicates** - same Spotify id or ISRC in the tags, or an identical file - are
+  moved to the trash with one button.
+- **Maybe duplicates** - only artist and title match, the duration may differ - could be
+  another version (Original vs Extended Mix). They are only removed when you tick them.
+- The kept copy is the one with cue points or a beatgrid in Traktor, otherwise the best audio
+  quality (lossless, then bitrate).
+- Copies go to the system trash (Recycle Bin), never deleted permanently. Before each one the
+  kept file is checked, and a copy that is the kept file itself (hard link, symlink, different
+  case on Windows) is never removed.
+- Afterwards every genre still contains the song; where the file lives in another genre's
+  folder it is marked **IN OTHER GENRE**. Traktor references to removed copies, also in your
+  own playlists, point to the kept file. Playlist updates recognise the song and do not
+  download it again. Close Traktor before cleaning up.
 
 ## Splitting genres
 
@@ -215,8 +236,8 @@ groups can be lassoed. *Split these songs* pre-fills the split dialog.
 
 ![The split dialog, pre-filled from a recommendation](docs/screenshots/split-dialog.png)
 
-**Duplicates.** Copies of the same song found during the import. DJ Manager uses one file;
-the others are listed so you can delete them.
+**Duplicates.** Which copy of each song is kept and which go to the trash; uncertain matches
+are listed separately to tick.
 
 ![Duplicate files found during import](docs/screenshots/duplicates.png)
 

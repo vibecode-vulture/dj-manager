@@ -253,3 +253,13 @@ table.simple { width: 100%; border-collapse: collapse; }
 .tracks tr.st-failed td, .tracks tr.st-unavailable td { color: var(--muted); }
 .tracks tr.st-failed td.st, .tracks tr.st-unavailable td.st { white-space: nowrap; overflow: visible; }
 .tracks td .btn.tiny { padding: 1px 6px; font-size: 10px; }
+
+/* ---------- duplicates */
+.badge.elsewhere { background: var(--raised); color: var(--text-2); }
+.dup-group { background: var(--panel); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 8px; }
+.dup-song { margin-bottom: 6px; }
+.dup-file { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; flex-wrap: wrap; }
+.dup-file i { color: var(--muted); font-style: normal; font-size: 11px; }
+.dup-reason { margin: 0 0 4px 50px; font-size: 11px; }
+.dup-pick { font-size: 10px; font-weight: 700; color: var(--orange); white-space: nowrap; }
+.panel.dup { max-width: 1240px; }
