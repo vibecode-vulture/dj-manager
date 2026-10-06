@@ -60,6 +60,9 @@ def test_finds_the_planted_groups(tmp_path):
     assert any(set(s["track_ids"]) == group_b for s in res["suggestions"])
     best = res["suggestions"][0]
     assert set(best["track_ids"]) == group_b
+    # all four signals found the same group -> merged into one suggestion naming all of them
+    assert set(best["signals"]) == {"tempo", "energy", "sound", "styles"} and len(best["reasons"]) == 4
+    assert best["name_hint"]
     assert {"bpm_energy", "sound", "style"} <= set(res["maps"])
     assert len(res["maps"]["sound"]) == 30
 

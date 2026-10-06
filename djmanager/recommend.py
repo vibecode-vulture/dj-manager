@@ -75,6 +75,7 @@ def add_split(kind, values, idx, unit, fmt, min_gap, names, words=None, signal=N
         "title": f"{len(small)} songs at {fmt(sv.min())}-{fmt(sv.max())} {unit}",
         "description": f"{word} than the other {len(big)} songs ({fmt(bv.min())}-{fmt(bv.max())} {unit}); "
                        f"{shape}, separation {sep:.0%}",
+        "short": f"{word} ({fmt(sv.min())}-{fmt(sv.max())} {unit})" if kind == "tempo" else word,
         "name_hint": names[side],
     })
 
@@ -208,7 +209,7 @@ if timbre is not None and len(timbre) >= 3:
                     "signal": "sound", "score": round(sil, 3), "track_ids": [ids[t_keep[m]] for m in members],
                     "title": f"{len(members)} songs with a similar sound",
                     "description": ", ".join(words) + f" than the rest; grouping quality {sil:.2f}",
-                    "name_hint": "",
+                    "short": ", ".join(words), "name_hint": "",
                 })
 
 emb, e_keep = load("embedding")
@@ -237,16 +238,28 @@ if emb is not None and len(emb) >= 3:
                     "signal": "styles", "score": round(sil, 3), "track_ids": [ids[e_keep[m]] for m in members],
                     "title": f"{len(members)} songs" + (f": {name}" if name else " with a similar style"),
                     "description": why + f"; grouping quality {sil:.2f}",
+                    "short": f"mostly {name}" if name else "similar style",
                     "name_hint": name.lower().replace(" ", "-"),
                 })
 
 maps["bpm_energy"] = [[t["id"], t["bpm"], t["energy"]] for t in tracks if t.get("bpm") and t.get("energy") is not None]
-# drop near-duplicate suggestions (same songs found by two signals), keep the stronger one
+# Several signals finding (almost) the same songs make one suggestion that lists all of
+# them - agreement between signals is the strongest hint for a real sub genre.
 unique = []
 for s in sorted(suggestions, key=lambda s: -s["score"]):
     ids_s = set(s["track_ids"])
-    if all(len(ids_s & set(u["track_ids"])) / len(ids_s | set(u["track_ids"])) < 0.8 for u in unique):
-        unique.append(s)
+    same = next((u for u in unique if len(ids_s & set(u["track_ids"])) / len(ids_s | set(u["track_ids"])) >= 0.8), None)
+    if same is None:
+        unique.append({**s, "signals": [s["signal"]], "reasons": [s["description"]], "shorts": [s["short"]]})
+    elif s["signal"] not in same["signals"]:
+        same["signals"].append(s["signal"])
+        same["reasons"].append(s["description"])
+        same["shorts"].append(s["short"])
+        same["name_hint"] = same["name_hint"] or s["name_hint"]
+for u in unique:  # agreement first, then separation quality
+    u["score"] = round(u["score"] + 0.25 * (len(u["signals"]) - 1), 3)
+    u["title"] = f"{len(u['track_ids'])} songs: " + ", ".join(u["shorts"])
+unique.sort(key=lambda u: -u["score"])
 print(json.dumps({"suggestions": unique, "maps": maps}))
 '''
 
