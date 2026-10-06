@@ -61,6 +61,7 @@ Traktor and refuses to write while it is open.
 | Removed | Tracks that are in no genre anymore. They are never deleted; delete the file yourself and they disappear |
 | Duplicates | Copies of the same song found during import. The first file found is used and the others are listed |
 | Split | Selected songs of a genre become a new sub genre, with new Spotify playlists for both |
+| Analysis | BPM and key of every song, computed by DJ Manager (stoppable, resumes where it stopped) |
 
 Songs are identified by the Spotify URL that spotdl embeds, then by ISRC, then by
 artist + title (± 3 s duration).
@@ -106,6 +107,32 @@ have up to 5 users.
 
 Playlists of the connected account are then read through the official Web API, which also
 works for private playlists. Other people's playlists are still read with spotdl.
+
+## Ratings, BPM and key
+
+Track lists show the **rating** (stars from the file's tags, e.g. what Traktor or other
+players wrote; Traktor's collection fills in for files without one), plus **BPM** and
+**key** from DJ Manager's own analysis. Columns are sortable; keys are shown in Open Key
+(like Traktor), Camelot or musical notation (Settings → Analysis).
+
+The analysis uses [Essentia](https://essentia.upf.edu/) on Linux and
+[librosa](https://librosa.org/) on Windows (Essentia has no Windows build). The tool is
+installed into the managed environment the first time it is needed, with a snapshot
+like every other dependency change. Songs are decoded with spotdl's ffmpeg and analysed by
+several worker processes in parallel.
+
+It starts automatically for
+- new downloads,
+- the songs found when a music folder is imported,
+- songs that appear in the music folder outside DJ Manager (found at startup and with
+  *Rescan*).
+
+The top bar shows its progress next to other tasks. **Stop** pauses it and keeps every
+finished result. A paused analysis does not restart by itself; **Resume** (top bar or
+Settings → Analysis) continues with the songs that are left. Settings → Analysis can also
+retry failed songs or analyse everything again, and sets the BPM range (results outside
+are halved or doubled), the key notation and the number of parallel workers. Results are
+stored in DJ Manager only; Traktor keeps its own analysis.
 
 ## Screenshots
 
@@ -213,5 +240,5 @@ with `SHA256SUMS.txt` as a release. Installed copies pick the release up on thei
 
 Layout: `djmanager/` contains `genres` (naming), `library` (model and persistence), `scanner`
 (initial import), `audio` (tags), `spotdl_client`, `deps` (managed environment), `traktor`
-(NML), `backup`, `spotify_api` (Web API, PKCE login), `procs` (stoppable child processes), `updater` (self-update), `service` (operations as background jobs), `api` (FastAPI)
+(NML), `backup`, `spotify_api` (Web API, PKCE login), `analysis` (BPM/key workers), `procs` (stoppable child processes), `updater` (self-update), `service` (operations as background jobs), `api` (FastAPI)
 and `static/` (UI). `packaging/` holds the build script, PyInstaller launcher, icon and installer.
