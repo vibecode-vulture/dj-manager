@@ -50,6 +50,11 @@ const S = {
 };
 
 function setView(view) {
+  if (view.type === "genre") {  // reveal the genre in the tree
+    const parts = view.key.split("_");
+    for (let i = 1; i < parts.length; i++) S.expanded.add(parts.slice(0, i).join("_"));
+    store.set("expanded", [...S.expanded]);
+  }
   S.view = view;
   S.selected.clear();
   S.filter = "";
@@ -258,7 +263,9 @@ async function renderGenre(deck, view) {
   S.rows = await api("GET", `/api/genre/${encodeURIComponent(key)}/tracks`);
   const tools = node.has_playlist ? `
       <button class="btn" ${node.spotify_url ? "" : "disabled"} onclick="syncPlaylist(${js(key)})">⟳ UPDATE</button>
+      ${node.spotify_url ? "" : `<button class="btn accent" onclick="createSpotifyPlaylist(${js(key)})" title="Create a private Spotify playlist with the songs of this genre and link it">+ SPOTIFY PLAYLIST</button>`}
       <button class="btn" onclick="editLink(${js(key)})">🔗 LINK</button>
+      <button class="btn" onclick="splitSelected(${js(key)})" title="Move the selected songs into a new sub genre">⑂ SPLIT</button>
       <button class="btn" onclick="showBlacklist(${js(key)})">⊘ BLACKLIST (${node.blacklist})</button>
       <button class="btn" id="btn-remove-tracks" onclick="removeSelected(${js(key)})">− REMOVE SELECTED</button>
       <button class="btn danger" onclick="removePlaylist(${js(key)})">✕ PLAYLIST</button>`
@@ -396,12 +403,15 @@ function addPlaylist(prefix = "") {
   const root = modal("ADD PLAYLIST", `
     <div class="field"><label>Name / genre</label><input type="text" id="pl-name" value="${esc(prefix ? prefix + "_" : "")}" placeholder="techno_hard-techno"></div>
     <div class="field"><label>Spotify link</label><input type="text" id="pl-url" placeholder="https://open.spotify.com/playlist/… (optional)"></div>
+    <div class="field"><label></label><label><input type="checkbox" id="pl-create"> Create a new empty Spotify playlist instead
+      ${S.app?.spotify?.connected ? "" : `<span class="help">(connect your Spotify account in Settings first)</span>`}</label></div>
     <div class="preview" id="pl-preview"></div>
     <p class="help">Use <b>_</b> for genre layers and <b>-</b> for spaces. Example: <span class="mono">house_deep-house</span>
       creates <span class="mono">house/deep-house/</span> and the Traktor playlists <span class="mono">house</span> and <span class="mono">house_deep-house</span>.</p>`,
   [{ label: "Cancel" }, {
     label: "Add & download", cls: "accent", action: async (r) => {
-      const res = await runJob(api("POST", "/api/playlists", { name: $("#pl-name", r).value, url: $("#pl-url", r).value }));
+      const create = $("#pl-create", r).checked;
+      const res = await runJob(api("POST", "/api/playlists", { name: $("#pl-name", r).value, url: create ? "" : $("#pl-url", r).value, create_on_spotify: create }));
       return res ? undefined : true;
     },
   }]);
@@ -413,6 +423,60 @@ function addPlaylist(prefix = "") {
       : "enter a name";
   };
   $("#pl-name", root).addEventListener("input", upd);
+  $("#pl-create", root).addEventListener("change", (ev) => { $("#pl-url", root).disabled = ev.target.checked; upd(); });
+  upd();
+}
+
+function spotifyName(key) {
+  return (S.app?.settings.spotify_playlist_prefix ?? "") + key;
+}
+
+function needSpotify() {
+  if (S.app?.spotify?.connected) return false;
+  confirmBox("SPOTIFY ACCOUNT", "Creating playlists on Spotify needs your Spotify account. Connect it in Settings › Spotify first.",
+    "Open settings", () => setView({ type: "settings" }), "accent");
+  return true;
+}
+
+function createSpotifyPlaylist(key) {
+  if (needSpotify()) return;
+  const node = findNode(key);
+  confirmBox("CREATE SPOTIFY PLAYLIST", `Create the private playlist <b>${esc(spotifyName(key))}</b> in your Spotify account with the ${node.own_count} songs of this genre and link it?<br><br>
+    Songs without a Spotify id stay in the genre as <span class="badge local">LOCAL</span>.`,
+    "Create", () => runJob(api("POST", `/api/playlists/${encodeURIComponent(key)}/create-spotify`)), "accent");
+}
+
+function splitSelected(key) {
+  const ids = [...S.selected].filter((id) => S.rows.find((r) => r.id === id && r.playlist === key && r.status !== "deleted"));
+  if (!ids.length) return toast("Select the songs of this genre that should move into the new sub genre (click / ctrl / shift)");
+  if (needSpotify()) return;
+  const node = findNode(key);
+  const rest = node.own_count - ids.length;
+  const root = modal("SPLIT INTO SUB GENRE", `
+    <div class="field"><label>Songs</label><span>${ids.length} selected · ${rest} stay in <span class="mono">${esc(key)}</span></span></div>
+    <div class="field"><label>Sub genre name</label><input type="text" id="split-name" placeholder="speed garage"></div>
+    <div class="preview" id="split-preview"></div>
+    <p class="help">${node.spotify_url ? "The genre is updated from Spotify first. " : ""}Two new private playlists are created in your Spotify account:
+      one for the new sub genre with the selected songs and one for <span class="mono">${esc(key)}</span> with the remaining songs.
+      The previous Spotify playlist is <b>not changed or deleted</b>. Files in this genre's folder move into the new sub folder;
+      songs stored in other genres' folders stay where they are.</p>`,
+  [{ label: "Cancel" }, {
+    label: "Split", cls: "accent", action: async (r) => {
+      const name = $("#split-name", r).value.trim();
+      if (!name) { toast("Enter a name for the sub genre", true); return true; }
+      const res = await runJob(api("POST", `/api/playlists/${encodeURIComponent(key)}/split`, { track_ids: ids, name }));
+      if (res) { S.selected.clear(); S.expanded.add(key); store.set("expanded", [...S.expanded]); }
+      return res ? undefined : true;
+    },
+  }]);
+  const upd = () => {
+    const part = normalizeKey($("#split-name", root).value);
+    const sub = part && !part.includes("_") ? `${key}_${part}` : "";
+    $("#split-preview", root).innerHTML = sub
+      ? `new genre <b>${esc(sub)}</b><br>folder <b>${esc(node.folder)}/${esc(part)}/</b><br>spotify <b>${esc(spotifyName(sub))}</b> + <b>${esc(spotifyName(key))}</b>${findNode(sub) ? "<br><span style='color:var(--red)'>already exists</span>" : ""}`
+      : part.includes("_") ? "<span style='color:var(--red)'>one layer only - no _</span>" : "enter a name";
+  };
+  $("#split-name", root).addEventListener("input", upd);
   upd();
 }
 
@@ -488,6 +552,7 @@ function pickMusicFolder() {
 // ------------------------------------------------------------------ settings
 function renderSettings(view) {
   const s = S.app.settings;
+  const sp = S.app.spotify || {};
   const field = (label, html, help = "") => `<div class="field"><label>${label}</label><div>${html}${help ? `<p class="help">${help}</p>` : ""}</div></div>`;
   const text = (k, ph = "", type = "text") => `<input type="${type}" data-k="${k}" value="${esc(s[k])}" placeholder="${esc(ph)}">`;
   const check = (k, label) => `<label><input type="checkbox" data-k="${k}" ${s[k] ? "checked" : ""}> ${label}</label>`;
@@ -506,11 +571,18 @@ function renderSettings(view) {
     ${field("Traktor folder", text("traktor_root_folder"), "Playlist folder owned by DJ Manager. Your other Traktor playlists are never edited.")}
 
     <h2>SPOTIFY</h2>
-    ${field("Credentials", select("spotify_auth_mode", [["default", "spotdl built-in credentials"], ["custom", "Own Spotify app (client id / secret)"]]),
-      "Own credentials avoid rate limits: create an app at developer.spotify.com and add the redirect URI <span class='mono'>http://127.0.0.1:9900/</span>.")}
-    ${field("Client ID", text("spotify_client_id"))}
-    ${field("Client secret", text("spotify_client_secret", "", "password"))}
-    ${field("User login", `${check("spotify_user_auth", "Use my Spotify login (private playlists)")}
+    ${field("Client ID", text("spotify_client_id", "from your app at developer.spotify.com"),
+      "Needed to create playlists (splitting genres). Create an app at developer.spotify.com (the app owner needs Spotify Premium), "
+      + "add the redirect URI <span class='mono'>http://127.0.0.1:9900/</span> and select the Web API.")}
+    ${field("Spotify account", `<div class="row">${sp.connected
+        ? `<span>connected as <b>${esc(sp.user)}</b></span> <button class="btn" onclick="disconnectSpotify()">DISCONNECT</button>`
+        : `<button class="btn accent" onclick="connectSpotify()">CONNECT SPOTIFY ACCOUNT</button><span class="help">${sp.has_client_id ? "not connected" : "enter and save the Client ID first"}</span>`}</div>`,
+      "DJ Manager only creates new playlists and adds songs to them. It never deletes or changes your other playlists.")}
+    ${field("Playlist name prefix", text("spotify_playlist_prefix"), "Playlists created by DJ Manager are named prefix + genre key, e.g. <span class='mono'>DJM · house_ukg-garage</span>.")}
+    ${field("spotdl credentials", select("spotify_auth_mode", [["default", "spotdl built-in credentials"], ["custom", "Own Spotify app (client id / secret)"]]),
+      "Reading other people's playlists uses spotdl. Your own app's credentials avoid rate limits.")}
+    ${field("Client secret", text("spotify_client_secret", "only for spotdl with own credentials", "password"))}
+    ${field("spotdl login", `${check("spotify_user_auth", "Let spotdl use my Spotify login (other people's private playlists shared with me)")}
       <div class="row" style="margin-top:6px"><button class="btn" onclick="runJob(api('POST','/api/spotify/login'))">LOGIN WITH SPOTIFY</button>
       <span class="help">${s.spotify_user_name ? "logged in as " + esc(s.spotify_user_name) : "not logged in"}</span></div>`)}
 
@@ -550,6 +622,19 @@ function applyUpdate() {
   const u = S.app?.update || {};
   confirmBox("UPDATE DJ MANAGER", `Download and install DJ Manager <b>${esc(u.latest || "")}</b>? The app closes and starts again with the new version. Your library, settings and spotdl environment are kept.`,
     "Update now", () => runJob(api("POST", "/api/update/apply")));
+}
+
+async function connectSpotify() {
+  const values = {};
+  $$("[data-k]", $("#view")).forEach((el) => { values[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value; });
+  if (!(values.spotify_client_id || "").trim()) return toast("Enter the Client ID of your Spotify app first", true);
+  await act(() => api("POST", "/api/settings", values));  // save the Client ID first
+  runJob(api("POST", "/api/spotify/connect"));
+  toast("Log in to Spotify in the browser window that opens");
+}
+
+async function disconnectSpotify() {
+  if (await act(() => api("POST", "/api/spotify/disconnect"))) refresh();
 }
 
 function pickNml() {
