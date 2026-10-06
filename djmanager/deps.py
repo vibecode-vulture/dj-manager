@@ -26,6 +26,9 @@ from .procs import release, spawn
 from .util import atomic_write_text, now_iso
 
 MANAGED_PACKAGES = ["spotdl", "yt-dlp"]
+# Installed on demand for BPM/key analysis (see analysis.py)
+OPTIONAL_PACKAGES = ["essentia", "librosa"]
+ALL_PACKAGES = MANAGED_PACKAGES + OPTIONAL_PACKAGES
 GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 # Standalone CPython for packaged builds (which have no interpreter to create a venv with).
 PYTHON_RUNTIME_VERSION = "3.12.15+20261003"
@@ -182,13 +185,13 @@ class DependencyManager:
 
     # ------------------------------------------------------------------ info
     def installed_versions(self) -> dict[str, str | None]:
-        result: dict[str, str | None] = {p: None for p in MANAGED_PACKAGES}
+        result: dict[str, str | None] = {p: None for p in ALL_PACKAGES}
         if not self.is_installed():
             return result
         script = (
             "import json, importlib.metadata as m\n"
             "out = {}\n"
-            f"for p in {MANAGED_PACKAGES!r}:\n"
+            f"for p in {ALL_PACKAGES!r}:\n"
             "    try: out[p] = m.version(p)\n"
             "    except Exception: out[p] = None\n"
             "print(json.dumps(out))"
@@ -275,14 +278,22 @@ class DependencyManager:
         self.ensure_venv(log)
         self.snapshot("before update")
         if package:
-            if package not in MANAGED_PACKAGES:
+            if package not in ALL_PACKAGES:
                 raise DependencyError(f"{package} is not a managed package")
             spec = f"{package}=={version}" if version else package
             self.pip("install", "--upgrade", spec, log=log)
         else:
-            self.pip("install", "--upgrade", *MANAGED_PACKAGES, log=log)
+            installed = [p for p, v in self.installed_versions().items() if v and p in OPTIONAL_PACKAGES]
+            self.pip("install", "--upgrade", *MANAGED_PACKAGES, *installed, log=log)
         snap = self.snapshot("after update")
         return snap.versions if snap else {}
+
+    def install_packages(self, packages: list[str], log=print) -> None:
+        """Add optional packages (with a snapshot before, so the change can be undone)."""
+        self.ensure_venv(log)
+        self.snapshot("before installing " + ", ".join(packages))
+        self.pip("install", *packages, log=log)
+        self.snapshot("after installing " + ", ".join(packages))
 
     def restore(self, snapshot_id: str, log=print) -> dict:
         snap = next((s for s in self.state.snapshots if s.id == snapshot_id), None)

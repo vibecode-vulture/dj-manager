@@ -6,7 +6,8 @@ import threading
 from pathlib import Path, PurePosixPath
 
 from . import genres
-from .audio import read_info
+from .analysis import Analyzer, Result, format_key
+from .audio import popm_to_stars, read_info
 from .backup import BackupManager
 from .deps import DependencyManager
 from .jobs import Job, JobCancelled, JobRunner
@@ -35,6 +36,9 @@ class Service:
         self.spotdl = spotdl or SpotdlClient(self.deps, self.settings_store.settings)
         self.spotify = spotify or SpotifyAPI(self.settings_store.settings)
         self.jobs = JobRunner()
+        # Analysis runs in its own lane so a long first analysis never blocks downloads.
+        self.analysis_jobs = JobRunner()
+        self.analyzer = Analyzer(self.deps, self.settings_store.settings)
         self.updater = Updater(self.settings_store.settings)
         self.library: Library | None = None
         self.open_library()
@@ -83,6 +87,7 @@ class Service:
             lib.save()
         job.write(result.summary())
         self.write_traktor(job, "initial import")
+        self.auto_analyze()
         return result.summary()
 
     def submit_rescan(self) -> Job:
@@ -93,8 +98,9 @@ class Service:
                 result = scan(lib, job.write)
                 lib.save()
             self.write_traktor(job, "rescan")
+            self.auto_analyze()
             return result.summary()
-        return self.jobs.submit("Rescan music folder", run)
+        return self.jobs.submit("Rescan music folder", run, dedupe=True)
 
     # ------------------------------------------------------------------ traktor
     def write_traktor(self, job: Job, reason: str) -> str:
@@ -118,6 +124,8 @@ class Service:
                 if collection.move(lib.abs_path(move.old), lib.abs_path(move.new)):
                     moved += 1
             added = 0
+            for track in lib.tracks.values():  # Traktor's ratings are the fallback for files without one
+                track.rating_traktor = popm_to_stars(collection.ranking(lib.abs_path(track.path)))
             for tid in lib.member_ids():
                 track = lib.tracks.get(tid)
                 if not track:
@@ -207,6 +215,7 @@ class Service:
                                 id=lib.new_id(), path=rel, title=song.title, artists=song.artists,
                                 album=song.album or tags.album, duration=song.duration or tags.duration,
                                 spotify_id=song.spotify_id, isrc=song.isrc or tags.isrc,
+                                rating=tags.rating, mtime=dst.stat().st_mtime,
                             ))
                             matched[song.spotify_id] = track.id
                         job.write(f"Downloaded: {rel}")
@@ -290,6 +299,7 @@ class Service:
             if linked and errors < len(linked):
                 self.deps.mark_current("good")
             self.write_traktor(job, "playlist update")
+            self.auto_analyze()
             for line in results:
                 job.write(line)
             if job.cancel_requested:
@@ -304,16 +314,111 @@ class Service:
             if not job.cancel_requested:
                 self.deps.mark_current("good")
             self.write_traktor(job, f"update of {key}")
+            self.auto_analyze()
             return f"Stopped - {result}" if job.cancel_requested else result
         return self.jobs.submit(f"Update {key}", run, dedupe=True)
 
+    def find_job(self, job_id: str) -> Job | None:
+        return self.jobs.get(job_id) or self.analysis_jobs.get(job_id)
+
     def cancel_job(self, job_id: str) -> Job | None:
+        if self.analysis_jobs.get(job_id):
+            # Stopped by the user: no automatic restart until Resume is pressed.
+            self.settings_store.update({"analysis_paused": True})
+            return self.analysis_jobs.cancel(job_id)
         return self.jobs.cancel(job_id)
 
     def shutdown(self) -> None:
         """Stop running work and every child process (called when DJ Manager exits)."""
         self.jobs.cancel_all()
+        self.analysis_jobs.cancel_all()
         kill_all()
+
+    # ------------------------------------------------------------------ analysis
+    def _analysable(self, lib: Library) -> list[Track]:
+        members = lib.member_ids()
+        return [t for t in lib.tracks.values() if t.id in members]
+
+    def analysis_status(self) -> dict:
+        lib = self.library
+        counts = {"done": 0, "pending": 0, "failed": 0}
+        if lib:
+            with lib.lock:
+                for track in self._analysable(lib):
+                    counts["done" if track.analysis == "done" else "failed" if track.analysis == "failed" else "pending"] += 1
+        current = self.analysis_jobs.current
+        return {**counts, "paused": self.settings.analysis_paused, "auto": self.settings.analysis_auto,
+                "engine": self.analyzer.engine() if self.deps.is_installed() else None,
+                "job": current.summary(len(current.log)) if current else None}
+
+    def auto_analyze(self) -> Job | None:
+        """Start analysing new songs unless the user switched it off or paused it."""
+        lib = self.library
+        if not lib or not self.settings.analysis_auto or self.settings.analysis_paused or not self.deps.is_installed():
+            return None
+        with lib.lock:
+            pending = any(t.analysis == "" for t in self._analysable(lib))
+        return self.submit_analysis() if pending else None
+
+    def submit_analysis(self, mode: str = "pending", manual: bool = False) -> Job:
+        """mode: 'pending' (resume), 'failed' (retry failed songs) or 'all' (analyse everything again)."""
+        lib = self.require_library()
+        if manual:
+            self.settings_store.update({"analysis_paused": False})
+        if mode in ("failed", "all"):
+            with lib.lock:
+                for track in self._analysable(lib):
+                    if mode == "all" or track.analysis == "failed":
+                        track.analysis, track.analysis_error = "", ""
+                lib.save()
+        return self.analysis_jobs.submit("Analyse BPM and key", self._job_analysis, dedupe=True)
+
+    def _job_analysis(self, job: Job) -> str:
+        lib = self.require_library()
+        engine = self.analyzer.ensure_tools(job.write)
+        with lib.lock:
+            todo = [(t.id, str(lib.abs_path(t.path))) for t in self._analysable(lib)
+                    if t.analysis == "" and lib.abs_path(t.path).exists()]
+        total, done, failed = len(todo), 0, 0
+        if not total:
+            return "All songs are analysed"
+        job.write(f"{total} songs to analyse ({engine})")
+        notation = self.settings.key_notation
+        unsaved = 0
+
+        def on_result(res: Result) -> None:
+            nonlocal done, failed, unsaved
+            with lib.lock:
+                track = lib.tracks.get(res.track_id)
+                if track is None:
+                    return
+                if res.error and str(lib.abs_path(track.path)) != res.path:
+                    pass  # moved while queued (e.g. split) - stays pending for the next run
+                elif res.error:
+                    track.analysis, track.analysis_error = "failed", res.error
+                    failed += 1
+                    job.write(f"FAILED {track.artist_line} - {track.title}: {res.error}")
+                else:
+                    track.bpm, track.key, track.analysis_engine = res.bpm, res.key, res.engine
+                    track.analysis, track.analysis_error = "done", ""
+                    job.write(f"{res.bpm:6.1f} BPM  {format_key(res.key, notation):>3}  {track.artist_line} - {track.title}")
+                done += 1
+                unsaved += 1
+                job.progress = done / total
+                if unsaved >= 10:
+                    lib.save()
+                    unsaved = 0
+
+        try:
+            self.analyzer.run(todo, on_result, job.write)
+        except JobCancelled:
+            pass  # results so far are kept; the message below says how to resume
+        finally:
+            with lib.lock:
+                lib.save()
+        if job.cancel_requested:
+            return f"Paused - {done} of {total} analysed, {total - done} left (Resume in Settings > Analysis)"
+        return f"{done - failed} songs analysed" + (f", {failed} failed" if failed else "")
 
     # ------------------------------------------------------------------ playlist management
     def _playlist(self, key: str) -> Playlist:
@@ -345,6 +450,7 @@ class Service:
             job.write(f"Created {key} -> {pl.folder}")
             result = self.sync_playlist(job, pl) if url else f"{key} created"
             self.write_traktor(job, f"adding {key}")
+            self.auto_analyze()
             return f"Stopped - {result}" if job.cancel_requested else result
         return self.jobs.submit(f"Add playlist {key}", run)
 
@@ -610,6 +716,9 @@ class Service:
     def startup(self) -> None:
         if self.settings.check_app_updates:
             self.check_app_update_background()
+        if self.library and self.library.initialized and self.settings.scan_on_start:
+            self.submit_rescan()  # finds songs added outside DJ Manager, then analyses them
         if self.library and self.settings.update_on_start and self.deps.is_installed() \
                 and any(pl.spotify_url for pl in self.library.playlists.values()):
             self.submit_update_all()
+        self.auto_analyze()  # resumes an interrupted analysis

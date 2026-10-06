@@ -38,6 +38,15 @@ class Settings:
     cookie_file: str = ""  # optional YouTube Music cookies (premium quality)
 
     update_on_start: bool = True
+    scan_on_start: bool = True  # find songs added to the music folder outside DJ Manager
+
+    # BPM / key analysis
+    analysis_auto: bool = True
+    analysis_paused: bool = False  # set when the user stops an analysis; cleared by Resume
+    analysis_workers: int = 0      # 0 = automatic (CPU cores - 1, at most 4)
+    bpm_min: int = 70
+    bpm_max: int = 185
+    key_notation: str = "openkey"  # openkey | camelot | musical
     # GitHub "owner/repo" with DJ Manager releases; empty = the repo the build came from
     update_repo: str = ""
     check_app_updates: bool = True

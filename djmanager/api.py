@@ -11,7 +11,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, genres, paths
-from .deps import MANAGED_PACKAGES, DependencyError, DependencyManager
+from .deps import ALL_PACKAGES, MANAGED_PACKAGES, DependencyError, DependencyManager
+from .analysis import analysis_packages, format_key, key_sort
 from .genres import GenreError
 from .jobs import Job
 from .library import SOURCE_LOCAL, Library, Track
@@ -23,7 +24,8 @@ from .updater import UpdateError
 STATIC = Path(__file__).parent / "static"
 
 
-def track_row(lib: Library, track: Track, source: str | None = None, playlist_key: str | None = None, status: str = "") -> dict:
+def track_row(lib: Library, track: Track, source: str | None = None, playlist_key: str | None = None, status: str = "",
+              notation: str = "openkey") -> dict:
     exists = lib.abs_path(track.path).exists()
     in_playlists = [pl.key for pl in lib.playlists_of(track.id)]
     if not status:
@@ -40,6 +42,9 @@ def track_row(lib: Library, track: Track, source: str | None = None, playlist_ke
         "duration": track.duration, "path": track.path, "spotify_id": track.spotify_id, "isrc": track.isrc,
         "playlists": in_playlists, "status": status, "source": source, "playlist": playlist_key,
         "duplicates": track.duplicates, "added_at": track.added_at,
+        "rating": track.stars, "rating_source": "file" if track.rating is not None else "traktor" if track.rating_traktor else "",
+        "bpm": track.bpm, "key": format_key(track.key, notation), "key_sort": key_sort(track.key),
+        "analysis": track.analysis, "analysis_error": track.analysis_error,
     }
 
 
@@ -47,6 +52,9 @@ def create_app(service: Service | None = None) -> FastAPI:
     svc = service or Service()
     app = FastAPI(title="DJ Manager", version=__version__)
     app.state.service = svc
+
+    def row(*args, **kwargs) -> dict:
+        return track_row(*args, notation=svc.settings.key_notation, **kwargs)
 
     @app.exception_handler(ServiceError)
     @app.exception_handler(GenreError)
@@ -74,6 +82,7 @@ def create_app(service: Service | None = None) -> FastAPI:
             "install_mode": paths.install_mode(),
             "update": svc.updater.last.to_dict() if svc.updater.last else None,
             "spotify": svc.spotify.status(),
+            "analysis": svc.analysis_status(),
             "settings": svc.settings.public(),
             "library_loaded": library is not None,
             "nml_path": str(nml) if nml else None,
@@ -159,35 +168,35 @@ def create_app(service: Service | None = None) -> FastAPI:
             for tid in library.genre_track_ids(key):
                 track = library.tracks[tid]
                 if own and tid in own.members:
-                    rows.append(track_row(library, track, own.members[tid], own.key))
+                    rows.append(row(library, track, own.members[tid], own.key))
                 else:
                     holder = next((pl for pl in library.playlists_of(tid) if genres.is_descendant_or_self(pl.key, key)), None)
-                    rows.append(track_row(library, track, holder.members[tid] if holder else None, holder.key if holder else None))
+                    rows.append(row(library, track, holder.members[tid] if holder else None, holder.key if holder else None))
             if own:
                 # Tracks removed from every genre whose file still lives in this folder
                 for track in library.orphans():
                     if library.playlist_owning_folder(track.path) is own:
-                        rows.append(track_row(library, track, None, own.key, status="deleted"))
+                        rows.append(row(library, track, None, own.key, status="deleted"))
             return rows
 
     @app.get("/api/collection")
     def collection():
         library = lib()
         with library.lock:
-            return [track_row(library, t) for t in library.tracks.values()]
+            return [row(library, t) for t in library.tracks.values()]
 
     @app.get("/api/removed")
     def removed():
         library = lib()
         with library.lock:
             library.purge_missing()
-            return [track_row(library, t, status="deleted") for t in library.orphans()]
+            return [row(library, t, status="deleted") for t in library.orphans()]
 
     @app.get("/api/duplicates")
     def duplicates():
         library = lib()
         with library.lock:
-            return [track_row(library, t) for t in library.tracks.values() if t.duplicates]
+            return [row(library, t) for t in library.tracks.values() if t.duplicates]
 
     @app.get("/api/playlists/{key}/blacklist")
     def blacklist(key: str):
@@ -263,11 +272,14 @@ def create_app(service: Service | None = None) -> FastAPI:
     # ------------------------------------------------------------------ dependencies
     @app.get("/api/deps")
     def deps_status():
-        return {**svc.deps.status(), "packages": MANAGED_PACKAGES}
+        status = svc.deps.status()
+        optional = [p for p in analysis_packages() if p not in MANAGED_PACKAGES]
+        optional += [p for p, v in status["versions"].items() if v and p not in MANAGED_PACKAGES + optional]
+        return {**status, "packages": MANAGED_PACKAGES + optional}
 
     @app.get("/api/deps/versions/{package}")
     def deps_versions(package: str):
-        if package not in MANAGED_PACKAGES:
+        if package not in ALL_PACKAGES:
             raise HTTPException(404, "Unknown package")
         try:
             return DependencyManager.available_versions(package)
@@ -307,7 +319,11 @@ def create_app(service: Service | None = None) -> FastAPI:
     # ------------------------------------------------------------------ jobs
     @app.get("/api/jobs")
     def jobs():
-        return [j.summary(len(j.log)) for j in svc.jobs.recent()]
+        return [j.summary(len(j.log)) for j in svc.jobs.recent() + svc.analysis_jobs.recent()]
+
+    @app.post("/api/analysis")
+    def analysis(data: dict = Body(default={})):
+        return job_ref(svc.submit_analysis(data.get("mode", "pending"), manual=True))
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str):
@@ -318,7 +334,7 @@ def create_app(service: Service | None = None) -> FastAPI:
 
     @app.get("/api/jobs/{job_id}")
     def job(job_id: str, since: int = 0):
-        j = svc.jobs.get(job_id)
+        j = svc.find_job(job_id)
         if j is None:
             raise HTTPException(404, "Job not found")
         return j.summary(since)
