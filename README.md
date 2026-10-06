@@ -62,6 +62,7 @@ Traktor and refuses to write while it is open.
 | Duplicates | Copies of the same song found during import. The first file found is used and the others are listed |
 | Split | Selected songs of a genre become a new sub genre, with new Spotify playlists for both |
 | Analysis | BPM and key of every song, computed by DJ Manager (stoppable, resumes where it stopped) |
+| Recommendations | Optional suggestions which songs of a genre could form a new sub genre |
 
 Songs are identified by the Spotify URL that spotdl embeds, then by ISRC, then by
 artist + title (± 3 s duration).
@@ -133,6 +134,46 @@ Settings → Analysis) continues with the songs that are left. Settings → Anal
 retry failed songs or analyse everything again, and sets the BPM range (results outside
 are halved or doubled), the key notation and the number of parallel workers. Results are
 stored in DJ Manager only; Traktor keeps its own analysis.
+
+## Split recommendations (optional)
+
+Off by default. Enable it under Settings → Split recommendations; every genre then gets a
+**✦ RECOMMEND** button. It shows groups of the genre's own songs that could become a new
+sub genre, and a map to pick groups yourself. A suggestion never changes anything: it only
+pre-fills the split dialog, which you confirm as usual.
+
+| Signal | What it finds | Extra analysis per 6-min song |
+|---|---|---|
+| BPM groups | A clear gap or a wide tempo range (e.g. 124-128 vs 138-142 BPM) | none |
+| Energy level 1-10 | Warm-up vs peak-time tracks (loudness, onset density, brightness) | ~2 s, with sound |
+| Sound similarity | Groups that are e.g. brighter, busier or bass-heavier than the rest | (same pass) |
+| AI styles | Groups with a typical style, named after it (400 Discogs styles, e.g. "Speed Garage") | ~3-4 s |
+
+Each signal can be switched on separately, and analysed either automatically for new songs
+(default for energy/sound) or only on request (default for AI styles). *Analyse collection
+now* fills in songs that were added before. The analyses run in the analysis lane and can be
+stopped and resumed like the BPM/key analysis.
+
+How suggestions are made:
+- BPM and energy: the best two-way split of the values; suggested when the two groups differ
+  clearly (4 BPM / 1.5 energy points) and both are large enough (Settings: smallest group).
+- Sound: a split along one property (e.g. brightness) is only suggested if it is sharper than
+  what random data reaches in 99% of cases, so a uniform genre gets no suggestion. Groups
+  that differ in a combination of properties are found by clustering.
+- AI styles: songs are grouped by their style embedding; the group is named after the style
+  that is most over-represented in it.
+- If several signals find the same songs, they form one suggestion listing every reason.
+
+The map shows the songs by BPM × energy, by sound or by style (similar songs close
+together). Draw around songs to select them (shift adds, double-click clears) and split
+the selection.
+
+The AI styles use the Discogs-EffNet model by the [Music Technology Group](https://essentia.upf.edu/models.html)
+(CC BY-NC-ND 4.0, free for non-commercial use), run with onnxruntime. DJ Manager computes
+the model's input itself, identical to Essentia's (verified against essentia-tensorflow),
+so the styles are the same on Linux and Windows. onnxruntime and the model (about 35 MB)
+are downloaded the first time the AI styles are analysed. Style labels of single songs are
+not always right; grouping by style similarity is more reliable than single labels.
 
 ## Screenshots
 
@@ -240,5 +281,5 @@ with `SHA256SUMS.txt` as a release. Installed copies pick the release up on thei
 
 Layout: `djmanager/` contains `genres` (naming), `library` (model and persistence), `scanner`
 (initial import), `audio` (tags), `spotdl_client`, `deps` (managed environment), `traktor`
-(NML), `backup`, `spotify_api` (Web API, PKCE login), `analysis` (BPM/key workers), `procs` (stoppable child processes), `updater` (self-update), `service` (operations as background jobs), `api` (FastAPI)
+(NML), `backup`, `spotify_api` (Web API, PKCE login), `analysis` (BPM/key, energy, sound and style workers), `recommend` (split suggestions), `procs` (stoppable child processes), `updater` (self-update), `service` (operations as background jobs), `api` (FastAPI)
 and `static/` (UI). `packaging/` holds the build script, PyInstaller launcher, icon and installer.
