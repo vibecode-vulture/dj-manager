@@ -255,7 +255,7 @@ def main() -> None:
 
     env = {**os.environ, "DJMANAGER_HOME": str(home), "PATH": f"{Path(args.ffmpeg).parent}{os.pathsep}{os.environ['PATH']}"}
     settings = {"traktor_nml": str(work / "collection.nml"), "traktor_path_mode": "native", "update_playlists_on_start": False,
-                "check_app_updates": False, "scan_on_start": False, "analysis_workers": 4, "spotify_client_id": "demo",
+                "check_app_updates": False, "scan_on_start": False, "analysis_workers": 2, "spotify_client_id": "demo",
                 "rec_enabled": True, "rec_styles": bool(args.models), "styles_auto": bool(args.models)}
     proc = start(home, env)
     try:
