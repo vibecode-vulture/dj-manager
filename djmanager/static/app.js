@@ -734,7 +734,8 @@ function renderSettings(view) {
     ${recSettingsHtml(field, check, text)}
 
     <h2>GENERAL</h2>
-    ${field("On start", check("update_on_start", "Update all playlists when DJ Manager starts"))}
+    ${field("On start", check("update_playlists_on_start", "Update all playlists when DJ Manager starts"),
+      "Off: playlists are only updated with UPDATE / UPDATE ALL.")}
     ${field("", check("scan_on_start", "Look for songs added to the music folder outside DJ Manager"))}
     ${field("Backups to keep", text("backups_to_keep", "", "number"), "The initial backup is always kept.")}
     <p><button class="btn accent" id="save-settings">SAVE SETTINGS</button></p>

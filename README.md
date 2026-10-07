@@ -65,6 +65,10 @@ Traktor and refuses to write while it is open.
 | Analysis | BPM and key of every song, computed by DJ Manager (stoppable, resumes where it stopped) |
 | Recommendations | Optional suggestions which songs of a genre could form a new sub genre |
 
+Playlists are updated from Spotify with **⟳ UPDATE** (one playlist) or **⟳ UPDATE ALL**.
+Updating all of them whenever DJ Manager starts can be switched on in Settings → General
+(off by default).
+
 Songs are identified by the Spotify URL that spotdl embeds, then by ISRC, then by
 artist + title (± 3 s duration).
 

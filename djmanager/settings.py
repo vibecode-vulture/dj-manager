@@ -38,7 +38,9 @@ class Settings:
     download_retries: int = 2  # extra attempts for songs that failed for technical reasons
     cookie_file: str = ""  # optional YouTube Music cookies (premium quality)
 
-    update_on_start: bool = True
+    # Sync every Spotify playlist at start (downloads new songs). Off by default; replaces the
+    # old 'update_on_start' key, which was on for everyone and is ignored now.
+    update_playlists_on_start: bool = False
     scan_on_start: bool = True  # find songs added to the music folder outside DJ Manager
 
     # BPM / key analysis

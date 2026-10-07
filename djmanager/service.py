@@ -961,7 +961,7 @@ class Service:
             self.check_app_update_background()
         if self.library and self.library.initialized and self.settings.scan_on_start:
             self.submit_rescan()  # finds songs added outside DJ Manager, then analyses them
-        if self.library and self.settings.update_on_start and self.deps.is_installed() \
+        if self.library and self.settings.update_playlists_on_start and self.deps.is_installed() \
                 and any(pl.spotify_url for pl in self.library.playlists.values()):
             self.submit_update_all()
         self.auto_analyze()  # resumes an interrupted analysis

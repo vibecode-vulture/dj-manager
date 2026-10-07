@@ -153,3 +153,28 @@ def test_stop_ends_update_all_after_current_playlist(env):
     first = lib.playlists["techno_acid" if fetched[0] == URL_B else "techno"]
     assert first.last_synced  # work done before Stop is kept
     assert "Stopped after" in job.result
+
+
+def test_playlists_update_on_start_only_when_enabled(home, monkeypatch):
+    import json
+
+    from djmanager import paths
+    from djmanager.service import Service
+    from djmanager.settings import SettingsStore
+
+    # an old settings file had the update on for everyone - it must not carry over
+    (paths.config_dir() / "settings.json").write_text(json.dumps({"update_on_start": True}))
+    assert SettingsStore().settings.update_playlists_on_start is False
+
+    service = Service()
+    calls = []
+    monkeypatch.setattr(service, "submit_update_all", lambda: calls.append(1))
+    monkeypatch.setattr(service, "auto_analyze", lambda: None)
+    monkeypatch.setattr(service.deps, "is_installed", lambda: True)
+    service.settings.check_app_updates = service.settings.scan_on_start = False
+    service.library = type("Lib", (), {"initialized": True, "playlists": {"x": type("P", (), {"spotify_url": URL_A})()}})()
+    service.startup()
+    assert calls == []
+    service.settings.update_playlists_on_start = True
+    service.startup()
+    assert calls == [1]
