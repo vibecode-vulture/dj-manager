@@ -5,7 +5,7 @@ not be automated (its terms forbid it). Deezer's public API knows related artist
 "artist radio" even for underground artists:
 - each selected song is looked up on Deezer (by ISRC, else by artist + title),
 - its artist's radio and the top songs of its related artists become suggestions,
-- songs suggested for several of the selected artists rank first,
+- songs that fit several of the selected artists rank first,
 - songs already in the collection are left out.
 Every Deezer song has a 30-second preview to listen to and an ISRC, which finds the very
 same song on Spotify when it is added to a genre.
@@ -177,7 +177,8 @@ def suggest(deezer: Deezer, seeds: list[Seed], is_known: Callable[[list[str], st
                 offer(track, RELATED_WEIGHT, via)
 
     songs, seen = [], set()
-    ranked = sorted(candidates.values(), key=lambda c: (-c["score"], -(c["track"].get("rank") or 0)))
+    # songs that fit the most selected artists first, then the closer fit, then the more popular
+    ranked = sorted(candidates.values(), key=lambda c: (-len(c["via"]), -c["score"], -(c["track"].get("rank") or 0)))
     for c in ranked:
         t = c["track"]
         artist = t["artist"].get("name", "")

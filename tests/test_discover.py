@@ -67,7 +67,7 @@ def deezer():
     fake.add(dz_track(1, "Surgeon", "Klonk", 10), dz_track(2, "Phuture", "Acid Tracks", 20, isrc="USAC1"))
     # suggestions
     fake.add(dz_track(101, "Regis", "Speak to Me", 30, isrc="GBREG1", rank=50),
-             dz_track(102, "Mike Parker", "Lustre", 31, isrc="USMP1", rank=2000),
+             dz_track(102, "Mike Parker", "Lustre", 31, isrc="USMP1", rank=9000),
              dz_track(103, "DJ Pierre", "Box Energy", 32, isrc="USDP1"),
              dz_track(104, "Ancient Methods", "Knights", 33, isrc="DEAM1", rank=5000))
     fake.radio = {10: [1, 101, 102], 20: [2, 101, 103]}
@@ -86,7 +86,8 @@ def test_suggestions_rank_songs_shared_by_several_artists_first(deezer):
     assert songs[0] == ("Regis", 2.0, ["Surgeon", "Phuture"])  # in both radios
     # Ancient Methods is related to both selected artists: half weight each
     assert ("Ancient Methods", 1.0, ["Surgeon", "Phuture"]) in songs
-    # equal scores: the more popular song first; the collection's own songs are left out
+    # songs fitting more selected artists first (Mike Parker is more popular, but fits only
+    # Surgeon), then the more popular song; the collection's own songs are left out
     assert [s[0] for s in songs[1:]] == ["Ancient Methods", "Mike Parker", "DJ Pierre"]
     # the seed found by ISRC needed no search
     assert any("/track/isrc:USAC1" in c for c in deezer.calls)
