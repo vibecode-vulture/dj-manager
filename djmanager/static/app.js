@@ -271,7 +271,21 @@ document.addEventListener("click", (ev) => {
 });
 
 // ------------------------------------------------------------------ render
+// Views load their data asynchronously. When the user switches views (or a refresh starts a
+// new render) before a slow request returns, e.g. /api/deps, the old view must not overwrite
+// the new one - viewData() drops such results.
+let renderSeq = 0;
+const STALE = Symbol("stale render");
+
+async function viewData(promise) {
+  const seq = renderSeq;
+  const data = await promise;
+  if (seq !== renderSeq) throw STALE;
+  return data;
+}
+
 async function render() {
+  renderSeq++;
   renderTree();
   $$(".fixed-nodes .node").forEach((n) => n.classList.toggle("active", n.dataset.view === S.view.type));
   const deck = $("#deck");
@@ -298,6 +312,7 @@ async function render() {
       default: setView({ type: "collection" });
     }
   } catch (e) {
+    if (e === STALE) return;
     view.innerHTML = `<div class="empty"><h3>Error</h3>${esc(e.message)}</div>`;
   }
 }
@@ -325,7 +340,7 @@ async function renderGenre(deck, view) {
   const node = findNode(key);
   if (!node) { setView({ type: "collection" }); return; }
   const local = () => S.rows.filter((r) => r.status === "local").length;
-  S.rows = await api("GET", `/api/genre/${encodeURIComponent(key)}/tracks`);
+  S.rows = await viewData(api("GET", `/api/genre/${encodeURIComponent(key)}/tracks`));
   const tools = node.has_playlist ? `
       <button class="btn" ${node.spotify_url ? "" : "disabled"} onclick="syncPlaylist(${js(key)})">⟳ UPDATE</button>
       ${node.spotify_url ? "" : `<button class="btn accent" onclick="createSpotifyPlaylist(${js(key)})" title="Create a Spotify playlist with the songs of this genre and link it">+ SPOTIFY PLAYLIST</button>`}
@@ -354,7 +369,7 @@ async function renderGenre(deck, view) {
 }
 
 async function renderList(deck, view, url, title, help) {
-  S.rows = await api("GET", url);
+  S.rows = await viewData(api("GET", url));
   deck.innerHTML = deckHtml({ letter: title[0], orange: title !== "Track Collection", title: esc(title), sub: esc(help), meters: [[S.rows.length, "TRACKS"]] });
   renderTable(view, { showPlaylist: true, showPath: S.view.type !== "collection" });
 }
@@ -820,7 +835,7 @@ function pickNml() {
 
 // ------------------------------------------------------------------ dependencies
 async function renderDeps(view) {
-  const d = await api("GET", "/api/deps");
+  const d = await viewData(api("GET", "/api/deps"));
   view.innerHTML = `<div class="panel">
     <h2>MANAGED DEPENDENCIES</h2>
     <p class="help">spotdl and yt-dlp change often when Spotify or YouTube change. They run in their own environment
@@ -864,7 +879,7 @@ async function renderDeps(view) {
 
 // ------------------------------------------------------------------ backups
 async function renderBackups(view) {
-  const list = await api("GET", "/api/backups");
+  const list = await viewData(api("GET", "/api/backups"));
   view.innerHTML = `<div class="panel">
     <h2>TRAKTOR BACKUPS</h2>
     <p class="help">A backup of the Traktor collection is created before DJ Manager changes it the first time and before every update.
@@ -1042,7 +1057,7 @@ function copyLine(c, extra = "") {
 }
 
 async function renderDuplicates(deck, view) {
-  const rep = await api("GET", "/api/duplicates");
+  const rep = await viewData(api("GET", "/api/duplicates"));
   if (S.view.type !== "duplicates") return;
   const uncertain = rep.groups.filter((g) => g.uncertain.length);
   deck.innerHTML = deckHtml({
@@ -1105,9 +1120,8 @@ async function renderRecommend(deck, view) {
     tools: `<button class="btn" onclick="setView({type:'genre', key:${js(key)}})">← BACK TO GENRE</button>`,
   });
   view.innerHTML = `<div class="empty">Looking for groups…</div>`;
-  const [rec, rows] = await Promise.all([api("GET", `/api/genre/${encodeURIComponent(key)}/recommendations`),
-    api("GET", `/api/genre/${encodeURIComponent(key)}/tracks`)]);
-  if (S.view.type !== "recommend" || S.view.key !== key) return;
+  const [rec, rows] = await viewData(Promise.all([api("GET", `/api/genre/${encodeURIComponent(key)}/recommendations`),
+    api("GET", `/api/genre/${encodeURIComponent(key)}/tracks`)]));
   const own = rows.filter((r) => r.playlist === key && r.status !== "deleted");
   S.rec = { key, rec, byId: new Map(own.map((r) => [r.id, r])), mapSel: new Set(), mapSpace: null, focus: null };
   const c = rec.coverage, t = rec.tasks;
