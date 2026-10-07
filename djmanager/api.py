@@ -194,6 +194,19 @@ def create_app(service: Service | None = None) -> FastAPI:
                         rows.append(row(library, track, None, own.key, status="deleted"))
             return rows
 
+    AUDIO_TYPES = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "audio/mp4", ".flac": "audio/flac",
+                   ".wav": "audio/wav", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".aiff": "audio/aiff", ".aif": "audio/aiff"}
+
+    @app.get("/api/tracks/{track_id}/audio")
+    def track_audio(track_id: str):
+        """The song's file for the player (supports range requests for seeking)."""
+        library = lib()
+        track = library.tracks.get(track_id)
+        path = library.file_of(track) if track else None
+        if path is None:
+            raise HTTPException(404, "No file for this song")
+        return FileResponse(path, media_type=AUDIO_TYPES.get(path.suffix.lower(), "application/octet-stream"))
+
     @app.get("/api/collection")
     def collection():
         library = lib()

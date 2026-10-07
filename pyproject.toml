@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Genre-based music collection manager that syncs Spotify playlists (via spotdl) into Traktor"
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi>=0.110",
+    "fastapi>=0.115",  # Starlette with range requests (seeking in the player)
     "uvicorn>=0.27",
     "mutagen>=1.47",
     "packaging>=23",
