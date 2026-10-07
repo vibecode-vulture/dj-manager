@@ -1,3 +1,3 @@
 """DJ Manager - single source of truth for a genre-based music collection."""
 
-__version__ = "0.4.1"
+__version__ = "0.5"
