@@ -303,6 +303,7 @@ async function render() {
     switch (S.view.type) {
       case "genre": return await renderGenre(deck, view);
       case "recommend": return await renderRecommend(deck, view);
+      case "discover": return await renderDiscover(deck, view);
       case "collection": return await renderList(deck, view, "/api/collection", "Track Collection", "All tracks managed by DJ Manager, each stored once on disk.");
       case "removed": return await renderList(deck, view, "/api/removed", "Removed", "Tracks that are in no genre anymore. They stay on disk (moved to _removed/ when their playlist was removed) - delete the files yourself and they disappear from this list.");
       case "duplicates": return await renderDuplicates(deck, view);
@@ -346,6 +347,7 @@ async function renderGenre(deck, view) {
       ${node.spotify_url ? "" : `<button class="btn accent" onclick="createSpotifyPlaylist(${js(key)})" title="Create a Spotify playlist with the songs of this genre and link it">+ SPOTIFY PLAYLIST</button>`}
       <button class="btn" onclick="editLink(${js(key)})">🔗 LINK</button>
       <button class="btn" onclick="splitSelected(${js(key)})" title="Move the selected songs into a new sub genre">⑂ SPLIT</button>
+      <button class="btn" onclick="discoverSelected(${js(key)})" title="Find new songs that fit the selected songs">✧ DISCOVER</button>
       ${S.app?.settings.rec_enabled ? `<button class="btn" onclick="setView({type:'recommend', key:${js(key)}})" title="Suggested groups for a new sub genre">✦ RECOMMEND</button>` : ""}
       <button class="btn" onclick="showBlacklist(${js(key)})">⊘ BLACKLIST (${node.blacklist})</button>
       <button class="btn" id="btn-remove-tracks" onclick="removeSelected(${js(key)})">− REMOVE SELECTED</button>
@@ -361,7 +363,7 @@ async function renderGenre(deck, view) {
     meters: [[node.count, "IN GENRE"], [node.own_count, "OWN"], [local(), "LOCAL"]], tools,
   });
   const missing = S.rows.filter((r) => r.playlist === key && (r.status === "failed" || r.status === "unavailable")).length;
-  if (missing && node.spotify_url) {
+  if (missing) {
     $(".tools", deck).insertAdjacentHTML("afterbegin",
       `<button class="btn orange" onclick="retryDownloads(${js(key)})" title="Download the missing songs again, including those not found on YouTube before">↻ RETRY DOWNLOADS (${missing})</button>`);
   }
@@ -956,7 +958,7 @@ const Player = {
   playList(rows, startId, label) {
     const playable = rows.filter((r) => r.has_file);  // songs without a file are skipped
     if (!playable.length) return toast("Nothing playable in this list", true);
-    this.queue = playable.map((r) => ({ id: r.id, title: r.title, artists: r.artists, bpm: r.bpm, key: r.key }));
+    this.queue = playable.map((r) => ({ id: r.id, title: r.title, artists: r.artists, bpm: r.bpm, key: r.key, src: r.src }));
     this.label = label || "";
     const start = Math.max(0, this.queue.findIndex((t) => t.id === startId));
     this.order = this.queue.map((_, i) => i);
@@ -974,7 +976,7 @@ const Player = {
   load(autoplay) {
     const t = this.current();
     if (!t) return;
-    this.audio.src = `/api/tracks/${encodeURIComponent(t.id)}/audio`;
+    this.audio.src = t.src || `/api/tracks/${encodeURIComponent(t.id)}/audio`;
     $("#pl-pos").value = 0;
     $("#pl-time").textContent = "0:00";
     $("#pl-dur").textContent = "";
@@ -1044,7 +1046,110 @@ const Player = {
 function viewLabel() {
   const v = S.view;
   if (v.type === "genre") return v.key.split("_").map((p) => p.replace(/-/g, " ")).join(" › ");
+  if (v.type === "discover") return `Discover · ${v.key.split("_").map((p) => p.replace(/-/g, " ")).join(" › ")}`;
   return { collection: "Track Collection", removed: "Removed" }[v.type] || "";
+}
+
+// ------------------------------------------------------------------ discover
+function discoverSelected(key) {
+  const ids = [...S.selected].filter((id) => S.rows.find((r) => r.id === id && r.status !== "deleted"));
+  if (!ids.length) return toast("Select the songs to find similar ones for (click / ctrl / shift)");
+  S.discover = { key, ids, result: null, ticked: new Set() };
+  setView({ type: "discover", key });
+}
+
+async function renderDiscover(deck, view) {
+  const key = S.view.key;
+  const node = findNode(key);
+  if (!node) { setView({ type: "collection" }); return; }
+  const d = S.discover && S.discover.key === key ? S.discover : null;
+  const name = esc(node.key.split("_").map((p) => p.replace(/-/g, " ")).join(" › "));
+  const back = `<button class="btn" onclick="setView({type:'genre', key:${js(key)}})">← BACK TO GENRE</button>`;
+  if (!d) {
+    deck.innerHTML = deckHtml({ letter: "✧", title: `Discover · ${name}`, sub: "New songs that fit the songs you select.", tools: back });
+    view.innerHTML = `<div class="empty">Select songs in the genre and press ✧ DISCOVER.</div>`;
+    return;
+  }
+  if (!d.result) {
+    deck.innerHTML = deckHtml({ letter: "✧", title: `Discover · ${name}`, sub: `Looking for songs that fit ${d.ids.length} selected songs…`, tools: back });
+    view.innerHTML = `<div class="empty">Asking Deezer for similar artists and songs…</div>`;
+    d.result = await viewData(api("POST", `/api/genre/${encodeURIComponent(key)}/discover`, { track_ids: d.ids }));
+  }
+  const res = d.result;
+  const rows = res.songs.map((x) => ({ ...x, id: `dz${x.id}`, deezer: x.id, has_file: true, src: `/api/discover/preview/${x.id}` }));
+  S.visible = rows;
+  const capped = res.selected > res.used ? ` (the first ${res.used} of ${res.selected})` : "";
+  const missing = res.missing.length ? ` · <span title="${esc(res.missing.join("\n"))}" style="color:var(--orange)">${res.missing.length} not found on Deezer</span>` : "";
+  const target = node.spotify_url ? "this genre and its linked Spotify playlist" : "this genre";
+  deck.innerHTML = deckHtml({
+    letter: "✧", title: `Discover · ${name}`,
+    sub: `Songs of artists related to your ${res.used} selected songs${capped}, from Deezer${missing}.<br>
+      Songs that fit several of your songs come first. Tick songs to add them to ${target}.`,
+    meters: [[rows.length, "SUGGESTIONS"], [res.found.length, "SONGS FOUND"]],
+    tools: `${back}<button class="btn accent" id="dz-add" onclick="addDiscovered(${js(key)})"></button>`,
+  });
+  view.innerHTML = rows.length ? `
+    <div class="filterbar">
+      <button class="btn tiny" id="play-all" title="Play the 30-second previews">▶ PLAY PREVIEWS</button>
+      <button class="btn tiny" id="dz-all">TICK ALL</button><button class="btn tiny" id="dz-none">TICK NONE</button>
+      <span class="hint">30-second previews from Deezer · double-click to play</span>
+    </div>
+    <table class="tracks discover"><thead><tr>
+      <th class="tick"></th><th class="num">#</th><th>TITLE</th><th>ARTIST</th><th>ALBUM</th><th class="time">TIME</th><th class="via">FITS</th>
+    </tr></thead><tbody>
+    ${rows.map((r, i) => `<tr data-id="${esc(r.id)}">
+      <td class="tick"><input type="checkbox" value="${esc(r.deezer)}" ${d.ticked.has(r.deezer) ? "checked" : ""}></td>
+      <td class="num"><span class="row-no">${i + 1}</span><span class="play-row" data-play="${esc(r.id)}" title="Play the preview">▶</span></td>
+      <td>${esc(r.title)}</td><td>${esc(r.artists)}</td><td>${esc(r.album)}</td><td class="time">${fmtTime(r.duration)}</td>
+      <td class="via" title="Related to ${esc(r.via.join(", "))}">${r.via.map((v) => `<span class="pl-chip">${esc(v)}</span>`).join("")}</td>
+    </tr>`).join("")}</tbody></table>`
+    : `<div class="empty">No new songs found${res.found.length ? " - everything Deezer suggests is already in your collection" : " - none of the selected songs is on Deezer"}.</div>`;
+  const paintAdd = () => {
+    const btn = $("#dz-add");
+    btn.textContent = `+ ADD ${d.ticked.size} TO GENRE`;
+    btn.disabled = !d.ticked.size;
+  };
+  paintAdd();
+  const tick = (box) => { box.checked ? d.ticked.add(box.value) : d.ticked.delete(box.value); paintAdd(); };
+  $$("tbody input[type=checkbox]", view).forEach((box) => box.addEventListener("change", () => tick(box)));
+  const tickAll = (on) => { $$("tbody input[type=checkbox]", view).forEach((box) => { box.checked = on; tick(box); }); };
+  $("#dz-all", view)?.addEventListener("click", () => tickAll(true));
+  $("#dz-none", view)?.addEventListener("click", () => tickAll(false));
+  const label = viewLabel();
+  $("#play-all", view)?.addEventListener("click", () => Player.playList(rows, null, label));
+  $$("[data-play]", view).forEach((b) => b.addEventListener("click", (ev) => { ev.stopPropagation(); Player.playList(rows, b.dataset.play, label); }));
+  $$("tbody tr", view).forEach((tr) => {
+    tr.addEventListener("dblclick", () => { window.getSelection()?.removeAllRanges(); Player.playList(rows, tr.dataset.id, label); });
+    tr.addEventListener("click", (ev) => {  // a click on the row ticks it
+      if (ev.target.closest("input, [data-play]")) return;
+      const box = $("input[type=checkbox]", tr);
+      box.checked = !box.checked;
+      tick(box);
+    });
+  });
+  Player.paint();
+}
+
+function addDiscovered(key) {
+  const d = S.discover;
+  if (!d || !d.ticked.size) return;
+  if (!S.app?.spotify?.connected) {
+    confirmBox("SPOTIFY ACCOUNT", "Adding songs needs your Spotify account: DJ Manager looks up the exact song on Spotify to download it and to keep it in sync. Connect it in Settings › Spotify first.",
+      "Open settings", () => setView({ type: "settings" }), "accent");
+    return;
+  }
+  const node = findNode(key);
+  const ids = [...d.ticked];
+  const where = node.spotify_url
+    ? `to <b>${esc(key)}</b> and to its linked Spotify playlist (if it is your own; otherwise to the genre only)`
+    : `to <b>${esc(key)}</b>`;
+  confirmBox("ADD SONGS", `Add ${ids.length} songs ${where}? They are looked up on Spotify and downloaded.`, "Add", async () => {
+    const res = await runJob(api("POST", `/api/playlists/${encodeURIComponent(key)}/discover-add`, { deezer_ids: ids }));
+    if (!res || !res.job) return;
+    d.result.songs = d.result.songs.filter((x) => !d.ticked.has(x.id));  // they are on their way into the genre
+    d.ticked.clear();
+    render();
+  }, "accent");
 }
 
 // ------------------------------------------------------------------ duplicates

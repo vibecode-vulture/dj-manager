@@ -133,6 +133,9 @@ table.tracks { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .tracks th.time { font-size: 10px; color: var(--muted); }
 .tracks .st { width: 200px; }
 .tracks .rating { width: 78px; }
+.tracks .tick { width: 28px; text-align: center; }
+.tracks.discover .via { width: 30%; }
+.tracks.discover tbody tr { cursor: pointer; }
 .tracks .bpm { width: 58px; text-align: right; font-variant-numeric: tabular-nums; }
 .tracks .key { width: 48px; text-align: center; color: var(--active); font-weight: 600; }
 .tracks th.bpm, .tracks th.key { color: var(--muted); font-weight: 600; }
