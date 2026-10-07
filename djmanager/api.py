@@ -207,6 +207,21 @@ def create_app(service: Service | None = None) -> FastAPI:
             raise HTTPException(404, "No file for this song")
         return FileResponse(path, media_type=AUDIO_TYPES.get(path.suffix.lower(), "application/octet-stream"))
 
+    @app.post("/api/genre/{key}/discover")
+    def discover(key: str, data: dict = Body(...)):
+        return svc.discover(key, list(data.get("track_ids") or []))
+
+    @app.get("/api/discover/preview/{deezer_id}")
+    def discover_preview(deezer_id: str):
+        """A suggested song's 30-second preview from Deezer (a local copy, so seeking works)."""
+        if not deezer_id.isdigit():
+            raise HTTPException(404, "Unknown song")
+        return FileResponse(svc.discover_preview(deezer_id), media_type="audio/mpeg")
+
+    @app.post("/api/playlists/{key}/discover-add")
+    def discover_add(key: str, data: dict = Body(...)):
+        return job_ref(svc.submit_discover_add(key, list(data.get("deezer_ids") or [])))
+
     @app.get("/api/collection")
     def collection():
         library = lib()

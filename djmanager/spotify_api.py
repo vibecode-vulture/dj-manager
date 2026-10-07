@@ -4,8 +4,9 @@ spotdl can only read. Creating playlists and adding songs needs the official Web
 a user login. Since February 2026 that requires a Development Mode app whose owner has
 Spotify Premium. The login uses PKCE, so only the app's Client ID is needed (no secret).
 
-DJ Manager never deletes or edits existing Spotify playlists; it only creates new ones
-and adds songs to playlists it created.
+DJ Manager never deletes Spotify playlists or removes songs from them. It creates new ones,
+adds songs to the user's own playlists (split, DISCOVER) and, on request, adds the name
+prefix to a playlist of the user's own.
 """
 
 from __future__ import annotations
@@ -267,6 +268,11 @@ class SpotifyAPI:
     def rename_playlist(self, pid: str, name: str) -> None:
         """Only works for playlists the user owns (Spotify answers 403 otherwise)."""
         self.request("PUT", f"/playlists/{pid}", body={"name": name})
+
+    def search_tracks(self, query: str) -> list[dict]:
+        """Songs matching a search (Development Mode apps get at most 10 results)."""
+        data = self.request("GET", "/search", params={"q": query, "type": "track", "limit": 10})
+        return [t for t in (data.get("tracks") or {}).get("items", []) if t]
 
     def playlist_tracks(self, pid: str) -> list[dict]:
         """Songs of a playlist the user owns, as dicts in spotdl's save format."""

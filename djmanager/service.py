@@ -6,20 +6,22 @@ import shutil
 import threading
 from pathlib import Path, PurePosixPath
 
-from . import genres
+from . import genres, paths
 from .analysis import STYLE_MODEL_FILES, TASK_LABELS, Analyzer, Result, format_key
 from .recommend import RecommendError, run_recommendations
 from .audio import popm_to_stars, read_info
 from .backup import BackupManager
 from . import dedupe
+from . import discover
 from .deps import DependencyManager
+from .discover import Deezer, DiscoverError, Seed
 from .jobs import Job, JobCancelled, JobRunner
 from .procs import kill_all
 from .library import REMOVED_FOLDER, SOURCE_LOCAL, SOURCE_SPOTIFY, Library, Playlist, Track
 from .scanner import scan
 from .settings import SettingsStore
 from .spotdl_client import RemoteSong, SpotdlClient, unique_songs
-from .spotify_api import SpotifyAPI, SpotifyAPIError, playlist_id
+from .spotify_api import SpotifyAPI, SpotifyAPIError, playlist_id, to_spotdl_song
 from .updater import Updater
 from .traktor import Collection, PlaylistNode, TrackMeta, TraktorError, find_collections, mapper_for, traktor_running
 from .util import AUDIO_EXTENSIONS, is_spotify_playlist_url, move_file, now_iso, safe_filename, unique_path
@@ -32,12 +34,13 @@ class ServiceError(RuntimeError):
 class Service:
     def __init__(self, settings: SettingsStore | None = None, deps: DependencyManager | None = None,
                  backups: BackupManager | None = None, spotdl: SpotdlClient | None = None,
-                 spotify: SpotifyAPI | None = None) -> None:
+                 spotify: SpotifyAPI | None = None, deezer: Deezer | None = None) -> None:
         self.settings_store = settings or SettingsStore()
         self.deps = deps or DependencyManager()
         self.backups = backups or BackupManager()
         self.spotdl = spotdl or SpotdlClient(self.deps, self.settings_store.settings)
         self.spotify = spotify or SpotifyAPI(self.settings_store.settings)
+        self.deezer = deezer or Deezer()
         self.jobs = JobRunner()
         # Analysis runs in its own lane so a long first analysis never blocks downloads.
         self.analysis_jobs = JobRunner(lane="analysis")
@@ -839,11 +842,16 @@ class Service:
     def submit_retry_downloads(self, key: str) -> Job:
         """Download the genre's missing songs again, including those not found on YouTube before."""
         pl = self._playlist(key)
-        if not pl.spotify_url:
-            raise ServiceError(f"{key} has no Spotify link")
+        if not pl.spotify_url and not self._missing_local_songs(pl):
+            raise ServiceError(f"{key} has no songs to download")
 
         def run(job: Job) -> str:
-            result = self.sync_playlist(job, pl, retry_unavailable=True)
+            results = [self.sync_playlist(job, pl, retry_unavailable=True)] if pl.spotify_url else []
+            local = self._missing_local_songs(pl)
+            if local:
+                job.write(f"--- {len(local)} added songs without a file")
+                results.append(self._add_local_songs(job, pl, local, retry_unavailable=True))
+            result = " · ".join(results)
             self.write_traktor(job, f"retrying downloads of {key}")
             self.auto_analyze()
             return result
@@ -976,6 +984,141 @@ class Service:
             self.write_traktor(job, f"splitting {pl.key}")
             return f"{sub_key} created with {len(moving)} songs, {len(staying)} stay in {pl.key}"
         return self.jobs.submit(f"Split {key}", run)
+
+    # ------------------------------------------------------------------ discover
+    def discover(self, key: str, track_ids: list[str]) -> dict:
+        """Suggestions (from Deezer) for the selected songs of a genre."""
+        lib = self.require_library()
+        self._playlist(key)
+        with lib.lock:
+            tracks = [lib.tracks[t] for t in dict.fromkeys(track_ids) if t in lib.tracks]
+            seeds = [Seed(t.artists, t.title, t.isrc, t.duration) for t in tracks if t.artists and t.title]
+        if not seeds:
+            raise ServiceError("Select the songs to find similar ones for first")
+
+        def known(artists: list[str], title: str, duration: float) -> bool:
+            return lib.match(None, None, artists, title, duration) is not None
+
+        try:
+            result = discover.suggest(self.deezer, seeds, known)
+        except DiscoverError as exc:
+            raise ServiceError(str(exc)) from exc
+        result["used"] = min(len(seeds), discover.MAX_SEEDS)
+        result["selected"] = len(seeds)
+        return result
+
+    def discover_preview(self, deezer_id: str) -> Path:
+        try:
+            return discover.cached_preview(self.deezer, deezer_id, paths.work_dir() / "previews")
+        except (DiscoverError, ValueError) as exc:
+            raise ServiceError(str(exc)) from exc
+
+    def _spotify_song(self, deezer_id: str) -> tuple[str, RemoteSong | None]:
+        """(label, the same song on Spotify) for a Deezer song."""
+        track = self.deezer.track(deezer_id)
+        artists, title = discover.song_artists(track), track.get("title", "")
+        isrc, duration = track.get("isrc"), float(track.get("duration") or 0)
+        label = f"{', '.join(artists)} - {title}"
+        hits = self.spotify.search_tracks(f"isrc:{isrc}") if isrc else []
+        hit = discover.pick_spotify(hits, isrc, artists, title, duration)
+        if hit is None and artists:
+            hits = self.spotify.search_tracks(f'track:"{track.get("title_short") or title}" artist:"{artists[0]}"')
+            hit = discover.pick_spotify(hits, None, artists, title, duration)
+        return label, RemoteSong.from_dict(to_spotdl_song(hit)) if hit else None
+
+    def _owns_link(self, pl: Playlist) -> bool:
+        pid = playlist_id(pl.spotify_url)
+        if not pid:
+            return False
+        if not pl.spotify_owner:
+            pl.spotify_owner = self.spotify.owner_of(pid)
+        return pl.spotify_owner == self.spotify.account.user_id
+
+    def submit_discover_add(self, key: str, deezer_ids: list[str]) -> Job:
+        """Add suggested songs to a genre: the same songs are looked up on Spotify (by ISRC),
+        added to the genre's linked playlist if it is the user's own, and downloaded."""
+        lib = self.require_library()
+        pl = self._playlist(key)
+        ids = list(dict.fromkeys(str(i) for i in deezer_ids if str(i).isdigit()))
+        if not ids:
+            raise ServiceError("Tick the songs to add first")
+        self.spotify.require()  # the Spotify song is needed to download and to keep it in sync
+
+        def run(job: Job) -> str:
+            job.write(f"Looking up {len(ids)} songs on Spotify ...")
+            songs: list[RemoteSong] = []
+            not_found: list[str] = []
+            for did in ids:
+                job.check_cancelled()
+                try:
+                    label, song = self._spotify_song(did)
+                except DiscoverError as exc:
+                    label, song = f"Deezer song {did} ({exc})", None
+                if song is None:
+                    not_found.append(label)
+                    job.write(f"NOT ON SPOTIFY: {label} - skipped")
+                    continue
+                if song.spotify_id not in {s.spotify_id for s in songs}:
+                    songs.append(song)
+                    job.write(f"  {label} -> {song.url}")
+            if not songs:
+                raise ServiceError("None of the songs was found on Spotify")
+            with lib.lock:
+                for song in songs:  # adding a song on purpose undoes an earlier removal
+                    pl.blacklist.pop(song.spotify_id, None)
+                lib.save()
+            skipped = f", {len(not_found)} not on Spotify" if not_found else ""
+
+            if pl.spotify_url and self._owns_link(pl):
+                with lib.lock:
+                    present = {lib.tracks[t].spotify_id for t, src in pl.members.items()
+                               if src == SOURCE_SPOTIFY and t in lib.tracks}
+                new = [s.spotify_id for s in songs if s.spotify_id not in present]
+                self.spotify.add_tracks(playlist_id(pl.spotify_url), new)
+                job.write(f"Added {len(new)} songs to the Spotify playlist {pl.spotify_url}")
+                result = self.sync_playlist(job, pl)
+            else:
+                if pl.spotify_url:
+                    job.write("The linked Spotify playlist is not yours, so the songs are only added to the genre")
+                result = self._add_local_songs(job, pl, songs)
+            self.write_traktor(job, f"adding discovered songs to {key}")
+            self.auto_analyze()
+            return result + skipped
+        return self.jobs.submit(f"Add discovered songs to {key}", run)
+
+    def _add_local_songs(self, job: Job, pl: Playlist, songs: list[RemoteSong], retry_unavailable: bool = False) -> str:
+        """Download songs into a genre without (an own) Spotify playlist; they become local members."""
+        lib = self.require_library()
+        matched, to_download, known, kept = self._match_songs(lib, songs, retry_unavailable)
+        job.write(f"{len(matched) - len(known) - kept} already in the collection, {len(to_download)} to download")
+        failed, unavailable, downloaded = self._download_missing(job, lib, pl, to_download, known, matched)
+        with lib.lock:
+            for song in songs:
+                tid = matched.get(song.spotify_id)
+                if tid:
+                    pl.members.setdefault(tid, SOURCE_LOCAL)
+            for song in failed:
+                job.write(f"FAILED to download: {', '.join(song.artists)} - {song.title} ({song.url})")
+            for song in (s for s in to_download if s.spotify_id in unavailable):
+                job.write(f"NOT ON YOUTUBE: {', '.join(song.artists)} - {song.title} ({song.url}) - "
+                          f"download it yourself and link the file")
+            lib.save()
+        return (f"{pl.key}: {len(songs)} songs added, {downloaded} downloaded, {len(failed)} failed"
+                + (f", {len(unavailable)} not on YouTube" if unavailable else ""))
+
+    def _missing_local_songs(self, pl: Playlist) -> list[RemoteSong]:
+        """Local members without a file that came from Spotify (added with DISCOVER)."""
+        lib = self.require_library()
+        songs = []
+        for tid, src in pl.members.items():
+            t = lib.tracks.get(tid)
+            if src != SOURCE_LOCAL or not t or not t.spotify_id or lib.has_file(t):
+                continue
+            songs.append(RemoteSong.from_dict({
+                "song_id": t.spotify_id, "name": t.title, "artists": t.artists, "artist": t.artists[0] if t.artists else "",
+                "album_name": t.album, "duration": t.duration, "isrc": t.isrc,
+                "url": f"https://open.spotify.com/track/{t.spotify_id}"}))
+        return songs
 
     def submit_spotify_connect(self) -> Job:
         def run(job: Job) -> str:

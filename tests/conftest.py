@@ -96,6 +96,7 @@ class FakeSpotifyServer:
         self.user = user
         self.playlists = {}  # id -> {"name", "owner", "public", "items": [track ids]}
         self.tracks = {}     # id -> track object
+        self.catalog = []    # track objects found by /search
         self.calls = []
         self.refreshes = 0
 
@@ -119,6 +120,18 @@ class FakeSpotifyServer:
             pid = f"pl{len(self.playlists):020d}"[:22]
             self.playlists[pid] = {"name": data["name"], "owner": self.user, "public": data.get("public"), "items": []}
             return 201, {}, _json.dumps({"id": pid, "external_urls": {"spotify": f"https://open.spotify.com/playlist/{pid}"}}).encode()
+        if u.path == "/v1/search":
+            q = parse_qs(u.query)["q"][0]
+            assert int(parse_qs(u.query)["limit"][0]) <= 10  # Development Mode limit
+            if q.startswith("isrc:"):
+                hits = [t for t in self.catalog if t.get("external_ids", {}).get("isrc") == q[5:]]
+            else:
+                words = dict(_re.findall(r'(\w+):"([^"]*)"', q))
+                hits = [t for t in self.catalog if words.get("track", "").lower() in t["name"].lower()
+                        and any(words.get("artist", "").lower() == a["name"].lower() for a in t["artists"])]
+            for t in hits:
+                self.tracks[t["id"]] = t
+            return 200, {}, _json.dumps({"tracks": {"items": hits}}).encode()
         m = _re.fullmatch(r"/v1/playlists/(\w+)(/items)?", u.path)
         if m:
             pl = self.playlists.get(m.group(1))
