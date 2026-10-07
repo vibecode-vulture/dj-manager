@@ -24,7 +24,9 @@ from .jobs import JobCancelled, current_job
 from .procs import release, spawn
 from .util import atomic_write_text, download, now_iso, urlopen
 
-MANAGED_PACKAGES = ["spotdl", "yt-dlp"]
+# yt-dlp needs a JavaScript runtime (Deno) and its challenge scripts (yt-dlp-ejs) for
+# YouTube since late 2025; Deno is distributed officially on PyPI.
+MANAGED_PACKAGES = ["spotdl", "yt-dlp", "yt-dlp-ejs", "deno"]
 # Installed on demand for BPM/key analysis (see analysis.py)
 OPTIONAL_PACKAGES = ["essentia", "librosa", "onnxruntime"]
 ALL_PACKAGES = MANAGED_PACKAGES + OPTIONAL_PACKAGES
@@ -286,6 +288,20 @@ class DependencyManager:
             self.pip("install", "--upgrade", *MANAGED_PACKAGES, *installed, log=log)
         snap = self.snapshot("after update")
         return snap.versions if snap else {}
+
+    @property
+    def bin_dir(self) -> Path:
+        """Folder with the environment's programs (python, deno, ...)."""
+        return self.python.parent
+
+    def ensure_managed(self, log=print) -> None:
+        """Install managed packages that are missing, e.g. Deno for installs made before it was needed."""
+        if not self.is_installed():
+            return
+        missing = [p for p, v in self.installed_versions().items() if p in MANAGED_PACKAGES and not v]
+        if missing:
+            log(f"Installing missing components: {', '.join(missing)}")
+            self.install_packages(missing, log)
 
     def install_packages(self, packages: list[str], log=print) -> None:
         """Add optional packages (with a snapshot before, so the change can be undone)."""

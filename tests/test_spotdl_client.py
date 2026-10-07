@@ -1,5 +1,6 @@
 """SpotdlClient against a stub 'spotdl' package, run in a real subprocess."""
 
+import os
 import sys
 import textwrap
 
@@ -18,12 +19,16 @@ SONGS = [
 
 class Deps:
     python = sys.executable
+    bin_dir = os.path.dirname(sys.executable)
 
     def is_installed(self):
         return True
 
     def installed_versions(self):
         return {"spotdl": "stub"}
+
+    def ensure_managed(self, log=print):
+        pass
 
 
 def make_stub(root, fast: bool):
@@ -103,3 +108,20 @@ def test_not_found_messages_are_matched_to_songs():
              "AudioProviderError: YT-DLP download error - https://music.youtube.com/watch?v=-g8PQ6o1NmI"]
     found = SpotdlClient._not_found(songs, lines)
     assert list(found) == [songs[0].spotify_id]  # the yt-dlp error is a technical failure, not "not found"
+
+
+def test_missing_components_like_deno_are_installed(home, monkeypatch):
+    from djmanager.deps import MANAGED_PACKAGES, DependencyManager
+
+    deps = DependencyManager()
+    installed = []
+    monkeypatch.setattr(deps, "is_installed", lambda: True)
+    monkeypatch.setattr(deps, "installed_versions", lambda: {"spotdl": "4.5.2", "yt-dlp": "2026.8.19", "yt-dlp-ejs": "0.8.0", "deno": None, "librosa": None})
+    monkeypatch.setattr(deps, "install_packages", lambda pkgs, log=print: installed.extend(pkgs))
+    deps.ensure_managed(lambda line: None)
+    assert installed == ["deno"]  # optional analysis packages are not forced
+    assert "deno" in MANAGED_PACKAGES and "yt-dlp-ejs" in MANAGED_PACKAGES
+    installed.clear()
+    monkeypatch.setattr(deps, "installed_versions", lambda: {p: "1" for p in MANAGED_PACKAGES})
+    deps.ensure_managed(lambda line: None)
+    assert installed == []

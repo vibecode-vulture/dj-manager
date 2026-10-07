@@ -14,6 +14,7 @@ falls back to `spotdl save`.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -109,7 +110,9 @@ class SpotdlClient:
         proc = spawn(
             cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
-            env=child_env(PYTHONIOENCODING="utf-8", TERM="dumb", COLUMNS="400"),
+            # the environment's own programs first: yt-dlp looks for deno on PATH
+            env=child_env(PYTHONIOENCODING="utf-8", TERM="dumb", COLUMNS="400",
+                          PATH=os.pathsep.join([str(self.deps.bin_dir), os.environ.get("PATH", "")])),
         )
         lines: list[str] = []
         try:
@@ -170,6 +173,7 @@ class SpotdlClient:
         """Download songs into a fresh staging folder. Returns spotify id -> file."""
         if not songs:
             return {}
+        self.deps.ensure_managed(log)  # e.g. Deno, which YouTube downloads need since late 2025
         staging = paths.work_dir() / f"staging-{uuid.uuid4().hex[:8]}"
         staging.mkdir(parents=True)
         save_file = staging / "songs.spotdl"

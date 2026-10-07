@@ -1,5 +1,3 @@
-from conftest import wait  # noqa: F401
-
 
 def test_audio_endpoint_serves_library_files_with_ranges(env):
     """The player streams files from the library only, with seeking (range requests)."""
