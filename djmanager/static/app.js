@@ -398,7 +398,8 @@ function renderTable(view, opts) {
   view.innerHTML = `
     <div class="filterbar">
       <input type="text" id="filter" placeholder="Search title, artist, album, path…" value="${esc(S.filter)}">
-      <span class="hint">${rows.length} tracks${opts.selectable ? " · click / ctrl / shift to select" : ""}</span>
+      <button class="btn tiny" id="play-all" title="Play this list (in the shown order)">▶ PLAY</button>
+      <span class="hint">${rows.length} tracks${opts.selectable ? " · click / ctrl / shift to select" : ""} · double-click to play</span>
     </div>
     ${rows.length ? `<table class="tracks"><thead><tr>
       <th class="num">#</th>${th("title", "TITLE")}${th("artists", "ARTIST")}${th("album", "ALBUM")}
@@ -407,7 +408,7 @@ function renderTable(view, opts) {
       ${opts.showPlaylist ? th("playlists", "PLAYLISTS") : ""}${opts.showPath ? th("path", "FILE") : ""}
     </tr></thead><tbody>
     ${rows.map((r, i) => `<tr data-id="${esc(r.id)}" class="st-${r.status} ${S.selected.has(r.id) ? "sel" : ""}" title="${esc(r.path)}">
-      <td class="num">${i + 1}</td><td>${esc(r.title)}</td><td>${esc(r.artists)}</td><td>${esc(r.album)}</td>
+      <td class="num"><span class="row-no">${i + 1}</span>${r.has_file ? `<span class="play-row" data-play="${esc(r.id)}" title="Play from here">▶</span>` : ""}</td><td>${esc(r.title)}</td><td>${esc(r.artists)}</td><td>${esc(r.album)}</td>
       <td class="rating">${stars(r)}</td><td class="bpm">${bpmCell(r)}</td><td class="key">${esc(r.key)}</td>
       <td class="time">${fmtTime(r.duration)}</td><td class="st">${badge(r)}</td>
       ${opts.showPlaylist ? `<td>${r.playlists.map((p) => `<span class="pl-chip">${esc(p)}</span>`).join("")}</td>` : ""}
@@ -427,6 +428,15 @@ function renderTable(view, opts) {
     store.set("sort", S.sort);
     renderTable(view, opts);
   }));
+  const playFrom = (id) => Player.playList(S.visible, id, viewLabel());
+  $("#play-all", view)?.addEventListener("click", () => playFrom(null));
+  $$("tbody tr", view).forEach((tr) => tr.addEventListener("dblclick", () => {
+    window.getSelection()?.removeAllRanges();  // a double-click would also select a word
+    const r = S.rows.find((x) => x.id === tr.dataset.id);
+    if (r && r.has_file) playFrom(r.id);
+  }));
+  $$("[data-play]", view).forEach((b) => b.addEventListener("click", (ev) => { ev.stopPropagation(); playFrom(b.dataset.play); }));
+  Player.paint();
   if (opts.selectable) {
     $$("tbody tr", view).forEach((tr) => tr.addEventListener("click", (ev) => {
       const id = tr.dataset.id;
@@ -847,6 +857,153 @@ async function renderBackups(view) {
   }));
 }
 
+// ------------------------------------------------------------------ audio player
+const Player = {
+  audio: null, queue: [], order: [], pos: -1, label: "",
+  shuffle: store.get("player.shuffle", false), loop: store.get("player.loop", "off"),  // off | all | one
+
+  init() {
+    this.audio = $("#audio");
+    const a = this.audio;
+    a.volume = store.get("player.volume", 0.8);
+    $("#pl-vol").value = Math.round(a.volume * 100);
+    $("#pl-vol").addEventListener("input", (ev) => { a.volume = ev.target.value / 100; store.set("player.volume", a.volume); });
+    $("#pl-play").addEventListener("click", () => this.toggle());
+    $("#pl-next").addEventListener("click", () => this.next(true));
+    $("#pl-prev").addEventListener("click", () => this.prev());
+    $("#pl-shuffle").addEventListener("click", () => this.setShuffle(!this.shuffle));
+    $("#pl-loop").addEventListener("click", () => this.setLoop({ off: "all", all: "one", one: "off" }[this.loop]));
+    const pos = $("#pl-pos");
+    let seeking = false;
+    pos.addEventListener("input", () => { seeking = true; $("#pl-time").textContent = fmtTime((pos.value / 1000) * (a.duration || 0)); });
+    pos.addEventListener("change", () => { if (a.duration) a.currentTime = (pos.value / 1000) * a.duration; seeking = false; });
+    a.addEventListener("timeupdate", () => {
+      if (!seeking && a.duration) pos.value = Math.round((a.currentTime / a.duration) * 1000);
+      if (!seeking) $("#pl-time").textContent = fmtTime(a.currentTime);
+    });
+    a.addEventListener("loadedmetadata", () => { $("#pl-dur").textContent = fmtTime(a.duration); pos.disabled = false; });
+    a.addEventListener("play", () => this.paint());
+    a.addEventListener("pause", () => this.paint());
+    a.addEventListener("ended", () => this.next(false));
+    a.addEventListener("error", () => {
+      if (this.pos < 0) return;
+      const t = this.current();
+      toast(`Cannot play ${t ? t.title : "this song"} here (format not supported by this window) - skipped`, true);
+      this.next(false);
+    });
+    document.addEventListener("keydown", (ev) => {  // space = play/pause, unless typing
+      if (ev.code !== "Space" || ev.target.closest("input, textarea, select, [contenteditable]") || $("#modal-root").innerHTML) return;
+      if (this.pos < 0) return;
+      ev.preventDefault();
+      this.toggle();
+    });
+    if ("mediaSession" in navigator) {  // keyboard media keys / OS controls
+      const ms = navigator.mediaSession;
+      ms.setActionHandler("play", () => this.toggle(true));
+      ms.setActionHandler("pause", () => this.toggle(false));
+      ms.setActionHandler("previoustrack", () => this.prev());
+      ms.setActionHandler("nexttrack", () => this.next(true));
+      try { ms.setActionHandler("seekto", (d) => { a.currentTime = d.seekTime; }); } catch { /* not supported */ }
+    }
+    this.paint();
+  },
+
+  current() { return this.pos >= 0 ? this.queue[this.order[this.pos]] : null; },
+
+  playList(rows, startId, label) {
+    const playable = rows.filter((r) => r.has_file);  // songs without a file are skipped
+    if (!playable.length) return toast("Nothing playable in this list", true);
+    this.queue = playable.map((r) => ({ id: r.id, title: r.title, artists: r.artists, bpm: r.bpm, key: r.key }));
+    this.label = label || "";
+    const start = Math.max(0, this.queue.findIndex((t) => t.id === startId));
+    this.order = this.queue.map((_, i) => i);
+    if (this.shuffle) this.shuffleOrder(startId ? start : null);
+    this.pos = this.shuffle ? 0 : start;
+    this.load(true);
+  },
+
+  shuffleOrder(first) {
+    const rest = this.queue.map((_, i) => i).filter((i) => i !== first);
+    for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
+    this.order = first == null ? rest : [first, ...rest];
+  },
+
+  load(autoplay) {
+    const t = this.current();
+    if (!t) return;
+    this.audio.src = `/api/tracks/${encodeURIComponent(t.id)}/audio`;
+    $("#pl-pos").value = 0;
+    $("#pl-time").textContent = "0:00";
+    $("#pl-dur").textContent = "";
+    if (autoplay) this.audio.play().catch(() => {});
+    if ("mediaSession" in navigator && window.MediaMetadata) {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artists, album: this.label });
+    }
+    this.paint();
+  },
+
+  toggle(force) {
+    if (this.pos < 0) return;
+    const play = force ?? this.audio.paused;
+    if (play) this.audio.play().catch(() => {}); else this.audio.pause();
+  },
+
+  next(manual) {
+    if (this.pos < 0) return;
+    if (!manual && this.loop === "one") { this.audio.currentTime = 0; this.audio.play().catch(() => {}); return; }
+    if (this.pos + 1 < this.order.length) { this.pos += 1; return this.load(true); }
+    if (this.loop === "all" || (manual && this.loop === "one")) {
+      if (this.shuffle) this.shuffleOrder(null);
+      this.pos = 0;
+      return this.load(true);
+    }
+    this.audio.pause();  // end of the list
+    this.audio.currentTime = 0;
+    this.paint();
+  },
+
+  prev() {
+    if (this.pos < 0) return;
+    if (this.audio.currentTime > 3 || (this.pos === 0 && this.loop !== "all")) { this.audio.currentTime = 0; return; }
+    this.pos = this.pos > 0 ? this.pos - 1 : this.order.length - 1;
+    this.load(true);
+  },
+
+  setShuffle(on) {
+    this.shuffle = on;
+    store.set("player.shuffle", on);
+    if (this.pos >= 0) {  // keep the current song, reorder the rest
+      const cur = this.order[this.pos];
+      if (on) this.shuffleOrder(cur); else this.order = this.queue.map((_, i) => i);
+      this.pos = this.order.indexOf(cur);
+    }
+    this.paint();
+  },
+
+  setLoop(mode) { this.loop = mode; store.set("player.loop", mode); this.paint(); },
+
+  paint() {
+    const t = this.current();
+    const playing = t && !this.audio.paused;
+    $("#pl-play").textContent = playing ? "⏸" : "▶";
+    $("#pl-shuffle").classList.toggle("on", this.shuffle);
+    $("#pl-loop").classList.toggle("on", this.loop !== "off");
+    $("#pl-loop").textContent = this.loop === "one" ? "⟳1" : "⟳";
+    $("#pl-loop").title = { off: "Loop: off", all: "Loop: whole list", one: "Loop: this song" }[this.loop];
+    $("#pl-title").textContent = t ? t.title : "Nothing playing";
+    $("#pl-sub").textContent = t
+      ? [t.artists, t.bpm ? `${t.bpm.toFixed(1)} BPM` : "", t.key, `${this.label} · ${this.pos + 1}/${this.order.length}`].filter(Boolean).join(" · ")
+      : "Double-click a song or press ▶ PLAY in a list";
+    $$("tbody tr[data-id]").forEach((tr) => tr.classList.toggle("playing", !!t && tr.dataset.id === t.id));
+  },
+};
+
+function viewLabel() {
+  const v = S.view;
+  if (v.type === "genre") return v.key.split("_").map((p) => p.replace(/-/g, " ")).join(" › ");
+  return { collection: "Track Collection", removed: "Removed" }[v.type] || "";
+}
+
 // ------------------------------------------------------------------ duplicates
 const fmtMB = (b) => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`;
 
@@ -1125,5 +1282,6 @@ $("#btn-console").addEventListener("click", () => {
 if (store.get("console", false)) { $("#console").classList.add("collapsed"); $("#btn-console").textContent = "▴"; }
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("#modal-root").innerHTML = ""; });
 
+Player.init();
 refresh();
 setInterval(refreshState, 4000);

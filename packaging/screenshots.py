@@ -151,6 +151,7 @@ def capture(out: Path) -> None:
     o.add_argument("--headless")
     o.add_argument("--width=1440")
     o.add_argument("--height=900")
+    o.set_preference("media.autoplay.default", 0)  # allow the player to start in headless Firefox
     d = webdriver.Firefox(options=o)
     ev = lambda js: d.execute_script("return window.eval(arguments[0])", js)  # noqa: E731
     shot = lambda name, wait=1.0: (time.sleep(wait), d.save_screenshot(str(out / f"{name}.png")))  # noqa: E731
@@ -163,6 +164,9 @@ def capture(out: Path) -> None:
         ev("setView({type:'genre', key:'techno_hard-techno'})")
         time.sleep(1.2)
         d.find_elements(By.CSS_SELECTOR, "tbody tr td:nth-child(2)")[1].click()
+        ev("Player.playList(S.visible, S.visible[1].id, viewLabel())")  # show the player bar in use
+        time.sleep(2.5)
+        ev("Player.toggle(false)")
         shot("genre-playlist")
         ev("S.selected.clear(); setView({type:'genre', key:'techno'})")
         shot("genre-aggregate")

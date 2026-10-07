@@ -49,6 +49,27 @@
   </section>
 </div>
 
+<section class="player" id="player">
+  <div class="pl-buttons">
+    <button class="pl-btn" id="pl-shuffle" title="Shuffle">⤮</button>
+    <button class="pl-btn" id="pl-prev" title="Back (restart / previous song)">⏮</button>
+    <button class="pl-btn pl-play" id="pl-play" title="Play / pause (space)">▶</button>
+    <button class="pl-btn" id="pl-next" title="Skip to the next song">⏭</button>
+    <button class="pl-btn" id="pl-loop" title="Loop: off">⟳</button>
+  </div>
+  <div class="pl-track">
+    <div class="pl-title" id="pl-title">Nothing playing</div>
+    <div class="pl-sub" id="pl-sub">Double-click a song or press ▶ PLAY in a list</div>
+  </div>
+  <div class="pl-seek">
+    <span id="pl-time">0:00</span>
+    <input type="range" id="pl-pos" min="0" max="1000" value="0" disabled title="Seek">
+    <span id="pl-dur">0:00</span>
+  </div>
+  <div class="pl-vol"><span title="Volume">🔊</span><input type="range" id="pl-vol" min="0" max="100" value="80" title="Volume"></div>
+  <audio id="audio" preload="auto"></audio>
+</section>
+
 <footer class="console" id="console">
   <div class="console-head">
     <span class="section-label">LOG</span>

@@ -138,6 +138,16 @@ playlists are read by spotdl, which needs no login. (Since February 2026 Spotify
 apps read the songs of playlists you own or collaborate on, so a login would not help spotdl
 with other people's private playlists either.)
 
+## Player
+
+The bar at the bottom plays songs right in DJ Manager: double-click a song (or the ▶ on its
+row number) to play the list from there, or press **▶ PLAY** above a list to play all of it,
+in the order and with the search filter shown. Controls: play/pause (also the space bar),
+back (restarts the song, a second press goes to the previous one), skip, shuffle and loop
+(off / whole list / this song); seek on the progress bar, set the volume. Keyboard media keys
+work too. Songs without a file are skipped. Formats the window cannot play (e.g. AIFF in
+some browsers) are skipped with a message.
+
 ## Ratings, BPM and key
 
 Track lists show the **rating** (stars from the file's tags, e.g. what Traktor or other

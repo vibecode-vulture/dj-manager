@@ -29,7 +29,7 @@
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg); color: var(--text); font: 13px/1.4 var(--font);
-  display: grid; grid-template-rows: 48px 1fr auto; overflow: hidden; gap: 2px;
+  display: grid; grid-template-rows: 48px 1fr auto auto; overflow: hidden; gap: 2px;
 }
 button, input, select { font: inherit; color: inherit; }
 a { color: var(--active); cursor: pointer; }
@@ -263,3 +263,29 @@ table.simple { width: 100%; border-collapse: collapse; }
 .dup-reason { margin: 0 0 4px 50px; font-size: 11px; }
 .dup-pick { font-size: 10px; font-weight: 700; color: var(--orange); white-space: nowrap; }
 .panel.dup { max-width: 1240px; }
+
+/* ---------- player (deck style) */
+.player { display: grid; grid-template-columns: auto minmax(160px, 1.2fr) minmax(200px, 2fr) 150px; gap: 18px; align-items: center;
+  background: var(--panel); padding: 8px 16px; }
+.pl-buttons { display: flex; gap: 4px; align-items: center; }
+.pl-btn { background: var(--control); border: 0; border-radius: var(--radius); color: var(--text-2); width: 34px; height: 30px;
+  font-size: 15px; cursor: pointer; line-height: 1; }
+.pl-btn:hover { background: var(--control-hi); color: var(--text); }
+.pl-btn.on { background: var(--active); color: var(--active-ink); }
+.pl-btn.pl-play { width: 44px; height: 34px; background: var(--yellow); color: #2a2510; font-size: 17px; }
+.pl-btn.pl-play:hover { background: #fff6c4; }
+.pl-track { min-width: 0; }
+.pl-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-sub { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-seek { display: flex; gap: 8px; align-items: center; font-variant-numeric: tabular-nums; font-size: 11px; color: var(--text-2); }
+.pl-seek input { flex: 1; }
+.pl-vol { display: flex; gap: 6px; align-items: center; }
+.pl-vol input { width: 100%; }
+.player input[type=range] { accent-color: var(--active); height: 4px; }
+.tracks tr.playing td { color: var(--yellow) !important; }
+.tracks tr.playing td:first-child { box-shadow: inset 3px 0 var(--yellow); }  /* visible when selected too */
+.tracks tr.playing td.num::before { content: "♪ "; }
+.tracks td.num .play-row { display: none; cursor: pointer; color: var(--active); }
+.tracks tr:hover td.num .play-row { display: inline; }
+.tracks tr:hover td.num .row-no { display: none; }
+@media (max-width: 760px) { .player { grid-template-columns: 1fr; gap: 6px; } }
