@@ -203,6 +203,22 @@ def capture(out: Path) -> None:
                 a.move_to_element_with_offset(cv, int(w * fx), int(h * fy))
             a.release().perform()
             shot("recommendations-map", 0.6)
+        # DISCOVER (asks Deezer live - the demo's artists are real)
+        ev("setView({type:'genre', key:'techno_peak-time'})")
+        time.sleep(1.2)
+        ev("S.visible.slice(0, 4).forEach((r) => S.selected.add(r.id)); discoverSelected('techno_peak-time')")
+        for _ in range(60):
+            if d.find_elements(By.CSS_SELECTOR, "table.discover tbody tr"):
+                break
+            time.sleep(0.5)
+        boxes = d.find_elements(By.CSS_SELECTOR, "table.discover tbody input[type=checkbox]")
+        for box in boxes[1:4]:
+            box.click()
+        if boxes:
+            ev("Player.playList(S.visible, S.visible[0].id, viewLabel())")
+            time.sleep(2.5)
+            ev("Player.toggle(false)")
+            shot("discover")
         ev("setView({type:'duplicates'})")
         shot("duplicates")
         ev("setView({type:'settings'})")

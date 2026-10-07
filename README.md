@@ -156,6 +156,28 @@ back (restarts the song, a second press goes to the previous one), skip, shuffle
 work too. Songs without a file are skipped. Formats the window cannot play (e.g. AIFF in
 some browsers) are skipped with a message.
 
+## Discover new songs
+
+Select songs in a genre and press **✧ DISCOVER** to find new songs that fit them. DJ Manager
+asks [Deezer](https://developers.deezer.com/api)'s public API (no account or key needed) for
+the artists of the selected songs: their artist radio and the top songs of related artists
+become suggestions. Songs that fit several of your selected artists come first, the
+**FITS** column shows which ones, and songs already in your collection are left out. Up to
+25 selected songs are used per search.
+
+Every suggestion has a 30-second preview that plays in the player. Tick the songs you want and
+press **+ ADD … TO GENRE**:
+
+- Each song is looked up on Spotify by its ISRC, so it is exactly the same recording (songs
+  without an ISRC match by artist, title and length). Songs not on Spotify are skipped.
+- If the genre is linked to a Spotify playlist of your own, the songs are added to it and
+  downloaded right away. Otherwise (no link, or someone else's playlist) they are only
+  downloaded into the genre; in a linked genre they show as LOCAL.
+- Adding needs your Spotify account (*Settings › Spotify*); finding and listening do not.
+
+Why Deezer: Spotify's API cannot tell which playlists contain a song (its playlist search
+only matches names), and playlist finders such as Chosic do not allow automated use.
+
 ## Ratings, BPM and key
 
 Track lists show the **rating** (stars from the file's tags, e.g. what Traktor or other
@@ -254,6 +276,11 @@ groups can be lassoed. *Split these songs* pre-fills the split dialog.
 
 ![The split dialog, pre-filled from a recommendation](docs/screenshots/split-dialog.png)
 
+**Discover.** New songs for the selected songs, with the artists they fit; previews play in
+the player, ticked songs are added to the genre.
+
+![Discover: suggestions for four selected songs, three ticked](docs/screenshots/discover.png)
+
 **Duplicates.** Which copy of each song is kept and which go to the trash; uncertain matches
 are listed separately to tick.
 
@@ -351,5 +378,5 @@ with `SHA256SUMS.txt` as a release. Installed copies pick the release up on thei
 
 Layout: `djmanager/` contains `genres` (naming), `library` (model and persistence), `scanner`
 (initial import), `audio` (tags), `spotdl_client`, `deps` (managed environment), `traktor`
-(NML), `backup`, `spotify_api` (Web API, PKCE login), `analysis` (BPM/key, energy, sound and style workers), `recommend` (split suggestions), `procs` (stoppable child processes), `updater` (self-update), `service` (operations as background jobs), `api` (FastAPI)
+(NML), `backup`, `spotify_api` (Web API, PKCE login), `analysis` (BPM/key, energy, sound and style workers), `recommend` (split suggestions), `discover` (Deezer suggestions), `procs` (stoppable child processes), `updater` (self-update), `service` (operations as background jobs), `api` (FastAPI)
 and `static/` (UI). `packaging/` holds the build script, PyInstaller launcher, icon and installer.
