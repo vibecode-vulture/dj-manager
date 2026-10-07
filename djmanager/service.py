@@ -179,12 +179,55 @@ class Service:
         allowed = [s for s in songs if s.spotify_id not in pl.blacklist]
         skipped = len(songs) - len(allowed)
 
+        matched, to_download, known, kept_unavailable = self._match_songs(lib, allowed, retry_unavailable)
+        job.write(f"{len(songs)} songs on Spotify, {len(matched) - len(known) - kept_unavailable} already in the collection, "
+                  f"{len(to_download)} to download, {skipped} blacklisted"
+                  + (f", {kept_unavailable} not on YouTube (use Retry to search again)" if kept_unavailable else ""))
+        failed, unavailable, downloaded = self._download_missing(job, lib, pl, to_download, known, matched)
+
+        with lib.lock:
+            new_members: dict[str, str] = {}
+            for song in allowed:
+                tid = matched.get(song.spotify_id)
+                if tid:
+                    new_members.setdefault(tid, SOURCE_SPOTIFY)
+            removed = [tid for tid, src in pl.members.items() if src == SOURCE_SPOTIFY and tid not in new_members]
+            for tid, src in pl.members.items():
+                if src == SOURCE_LOCAL and tid not in new_members:
+                    new_members[tid] = SOURCE_LOCAL
+            for tid in removed:
+                t = lib.tracks.get(tid)
+                job.write(f"Removed from Spotify playlist: {t.artist_line + ' - ' + t.title if t else tid}")
+            pl.members = new_members
+            pl.last_synced = now_iso()
+            if job.cancel_requested and failed:
+                pl.last_error = f"Stopped - {len(failed)} songs not downloaded yet"
+            else:
+                problems = [f"{len(failed)} download errors"] if failed else []
+                problems += [f"{len(unavailable)} not on YouTube"] if unavailable else []
+                pl.last_error = ", ".join(problems)
+            if not job.cancel_requested:
+                for song in failed:
+                    job.write(f"FAILED to download: {', '.join(song.artists)} - {song.title} ({song.url})")
+                for song in (s for s in to_download if s.spotify_id in unavailable):
+                    job.write(f"NOT ON YOUTUBE: {', '.join(song.artists)} - {song.title} ({song.url}) - "
+                              f"download it yourself and link the file")
+            lib.save()
+        added = downloaded
+        if job.cancel_requested:
+            return f"{pl.key}: {added} downloaded, {len(failed)} left for the next update"
+        return (f"{pl.key}: {added} downloaded, {len(removed)} removed, {len(failed)} failed"
+                + (f", {len(unavailable)} not on YouTube" if unavailable else ""))
+
+    def _match_songs(self, lib: Library, songs: list[RemoteSong], retry_unavailable: bool = False):
+        """Find the songs in the collection. Returns (spotify id -> track id, songs to download,
+        spotify id -> known track without a file, number kept as 'not on YouTube')."""
         matched: dict[str, str] = {}  # spotify id -> track id
         to_download: list[RemoteSong] = []
         known: dict[str, Track] = {}  # tracks that exist but have no file yet
         kept_unavailable = 0
         with lib.lock:
-            for song in allowed:
+            for song in songs:
                 track = lib.match(song.spotify_id, song.isrc, song.artists, song.title, song.duration)
                 if track is None:
                     to_download.append(song)
@@ -198,10 +241,13 @@ class Service:
                     continue
                 known[song.spotify_id] = track
                 to_download.append(song)
-        job.write(f"{len(songs)} songs on Spotify, {len(matched) - len(known) - kept_unavailable} already in the collection, "
-                  f"{len(to_download)} to download, {skipped} blacklisted"
-                  + (f", {kept_unavailable} not on YouTube (use Retry to search again)" if kept_unavailable else ""))
+        return matched, to_download, known, kept_unavailable
 
+    def _download_missing(self, job: Job, lib: Library, pl: Playlist, to_download: list[RemoteSong],
+                          known: dict[str, Track], matched: dict[str, str]):
+        """Download songs into the genre's folder; songs that fail stay in the collection, marked.
+        Fills matched (spotify id -> track id). Returns (failed songs, {spotify id: reason} not
+        on YouTube, number downloaded)."""
         folder = lib.abs_path(pl.folder)
         folder.mkdir(parents=True, exist_ok=True)
         failed: list[RemoteSong] = []      # technical errors (after all retries)
@@ -266,39 +312,7 @@ class Service:
                 track.download_status, track.download_error = status, error
             lib.reindex()
 
-        with lib.lock:
-            new_members: dict[str, str] = {}
-            for song in allowed:
-                tid = matched.get(song.spotify_id)
-                if tid:
-                    new_members.setdefault(tid, SOURCE_SPOTIFY)
-            removed = [tid for tid, src in pl.members.items() if src == SOURCE_SPOTIFY and tid not in new_members]
-            for tid, src in pl.members.items():
-                if src == SOURCE_LOCAL and tid not in new_members:
-                    new_members[tid] = SOURCE_LOCAL
-            for tid in removed:
-                t = lib.tracks.get(tid)
-                job.write(f"Removed from Spotify playlist: {t.artist_line + ' - ' + t.title if t else tid}")
-            pl.members = new_members
-            pl.last_synced = now_iso()
-            if job.cancel_requested and failed:
-                pl.last_error = f"Stopped - {len(failed)} songs not downloaded yet"
-            else:
-                problems = [f"{len(failed)} download errors"] if failed else []
-                problems += [f"{len(unavailable)} not on YouTube"] if unavailable else []
-                pl.last_error = ", ".join(problems)
-            if not job.cancel_requested:
-                for song in failed:
-                    job.write(f"FAILED to download: {', '.join(song.artists)} - {song.title} ({song.url})")
-                for song in (s for s in to_download if s.spotify_id in unavailable):
-                    job.write(f"NOT ON YOUTUBE: {', '.join(song.artists)} - {song.title} ({song.url}) - "
-                              f"download it yourself and link the file")
-            lib.save()
-        added = downloaded
-        if job.cancel_requested:
-            return f"{pl.key}: {added} downloaded, {len(failed)} left for the next update"
-        return (f"{pl.key}: {added} downloaded, {len(removed)} removed, {len(failed)} failed"
-                + (f", {len(unavailable)} not on YouTube" if unavailable else ""))
+        return failed, unavailable, downloaded
 
     def _fetch(self, job: Job, pl: Playlist) -> list[RemoteSong]:
         """Own playlists through the Web API (private ones too), all others through spotdl."""
