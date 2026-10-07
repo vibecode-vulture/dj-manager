@@ -122,3 +122,28 @@ def test_connect_does_not_wait_behind_downloads(split_env, monkeypatch):
     assert job.status == "done" and busy.status == "running"
     gate.set()
     wait(busy)
+
+
+def test_add_prefix_to_a_linked_playlist_of_your_own(split_env):
+    svc, fake, server, music, nml = split_env
+    # techno_acid is linked to someone else's playlist: shown, but cannot be renamed
+    server.add_foreign(playlist_id(URL_B))
+    info = svc.spotify_playlist_info("techno_acid")
+    assert info["name"] == "foreign" and not info["own"] and not info["prefixed"]
+    with pytest.raises(ServiceError):
+        svc.rename_spotify_playlist("techno_acid")
+    assert server.playlists[playlist_id(URL_B)]["name"] == "foreign"
+
+    # a playlist of the user's own account, linked by hand
+    pid = server.transport("POST", "https://api.spotify.com/v1/me/playlists", {}, b'{"name": "Acid Gems"}')[2]
+    url = "https://open.spotify.com/playlist/" + __import__("json").loads(pid)["id"]
+    wait(svc.submit_edit_link("techno_acid", url))
+    pl = svc.library.playlists["techno_acid"]
+    assert pl.spotify_owner == server.user  # owner of the old link was not kept
+    info = svc.rename_spotify_playlist("techno_acid")
+    assert info["name"] == "DJM · Acid Gems" and info["prefixed"]
+    assert server.playlists[playlist_id(url)]["name"] == "DJM · Acid Gems"
+    assert svc.spotify_playlist_info("techno_acid")["prefixed"]
+    calls = len(server.calls)
+    svc.rename_spotify_playlist("techno_acid")  # already prefixed: nothing is sent
+    assert not any(m == "PUT" for m, _ in server.calls[calls:])

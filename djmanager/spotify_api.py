@@ -260,6 +260,14 @@ class SpotifyAPI:
         data = self.request("GET", f"/playlists/{pid}", params={"fields": "owner(id)"})
         return (data.get("owner") or {}).get("id", "")
 
+    def playlist_info(self, pid: str) -> dict:
+        data = self.request("GET", f"/playlists/{pid}", params={"fields": "name,owner(id)"})
+        return {"name": data.get("name", ""), "owner": (data.get("owner") or {}).get("id", "")}
+
+    def rename_playlist(self, pid: str, name: str) -> None:
+        """Only works for playlists the user owns (Spotify answers 403 otherwise)."""
+        self.request("PUT", f"/playlists/{pid}", body={"name": name})
+
     def playlist_tracks(self, pid: str) -> list[dict]:
         """Songs of a playlist the user owns, as dicts in spotdl's save format."""
         songs: list[dict] = []

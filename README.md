@@ -124,6 +124,10 @@ Creating Spotify playlists is also available for genres without a link
 (**+ SPOTIFY PLAYLIST**, with all songs of the genre) and in *Add playlist* (a new, empty
 Spotify playlist). The name prefix can be changed in Settings.
 
+A playlist of your own account that you linked by hand (**🔗 LINK**) keeps its name. When
+the name lacks the prefix, the link dialog shows **ADD PREFIX**, which renames it on Spotify
+(`Acid Gems` → `DJM · Acid Gems`). Other people's playlists cannot be renamed.
+
 ### Connect your Spotify account
 
 Spotify only allows creating playlists through your own Spotify app. Since February 2026

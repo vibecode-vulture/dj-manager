@@ -124,8 +124,13 @@ class FakeSpotifyServer:
             pl = self.playlists.get(m.group(1))
             if pl is None:
                 return 404, {}, b'{"error": {"message": "not found"}}'
+            if not m.group(2) and method == "PUT":
+                if pl["owner"] != self.user:
+                    return 403, {}, b'{"error": {"message": "Forbidden"}}'
+                pl.update({k: v for k, v in data.items() if k in ("name", "public")})
+                return 200, {}, b""
             if not m.group(2):
-                return 200, {}, _json.dumps({"owner": {"id": pl["owner"]}}).encode()
+                return 200, {}, _json.dumps({"name": pl["name"], "owner": {"id": pl["owner"]}}).encode()
             if method == "POST":
                 assert pl["owner"] == self.user and len(data["uris"]) <= 100
                 pl["items"] += [x.split(":")[-1] for x in data["uris"]]

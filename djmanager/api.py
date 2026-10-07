@@ -265,6 +265,14 @@ def create_app(service: Service | None = None) -> FastAPI:
     def edit_link(key: str, data: dict = Body(...)):
         return job_ref(svc.submit_edit_link(key, data.get("url", "")))
 
+    @app.get("/api/playlists/{key}/spotify")
+    def spotify_playlist(key: str):
+        return svc.spotify_playlist_info(key)
+
+    @app.post("/api/playlists/{key}/spotify/add-prefix")
+    def spotify_add_prefix(key: str):
+        return svc.rename_spotify_playlist(key)
+
     @app.post("/api/playlists/{key}/sync")
     def sync(key: str):
         return job_ref(svc.submit_sync(key))

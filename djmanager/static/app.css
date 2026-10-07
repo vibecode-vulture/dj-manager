@@ -165,6 +165,8 @@ table.tracks { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .field { display: grid; grid-template-columns: 220px 1fr; gap: 10px; align-items: center; margin: 6px 0; }
 .field > label { color: var(--text-2); font-size: 12px; }
 .field .row { display: flex; gap: 4px; align-items: center; }
+#link-name { gap: 8px; }
+#link-name .help { margin: 0; }
 input[type=text], input[type=password], input[type=number], select {
   background: var(--raised); border: 1px solid transparent; border-radius: var(--radius); padding: 6px 9px;
   width: 100%; outline: none; color: var(--text);

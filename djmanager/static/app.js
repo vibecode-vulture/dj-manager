@@ -613,8 +613,35 @@ function editLink(key) {
   modal("SPOTIFY LINK", `
     <div class="field"><label>Playlist</label><span class="mono">${esc(key)}</span></div>
     <div class="field"><label>Spotify link</label><input type="text" id="link-url" value="${esc(node.spotify_url)}" placeholder="https://open.spotify.com/playlist/…"></div>
+    ${node.spotify_url && S.app?.spotify?.connected ? `<div class="field"><label>Name on Spotify</label><div id="link-name" class="row"><span class="help">loading…</span></div></div>` : ""}
     <p class="help">Changing the link never removes tracks: songs that are not part of the new Spotify playlist stay in this genre and are marked <span class="badge local">LOCAL</span>.</p>`,
   [{ label: "Cancel" }, { label: "Save & update", cls: "accent", action: async (r) => (await runJob(api("PUT", `/api/playlists/${encodeURIComponent(key)}/link`, { url: $("#link-url", r).value }))) ? undefined : true }]);
+  const box = $("#link-name");
+  if (box) loadSpotifyName(key, box);
+}
+
+// Name of the linked playlist; playlists of the user's own account without the DJM prefix
+// can get it with one click (the name is only changed on Spotify).
+async function loadSpotifyName(key, box, info) {
+  const url = `/api/playlists/${encodeURIComponent(key)}/spotify`;
+  try {
+    info = info || await api("GET", url);
+  } catch (e) {
+    box.innerHTML = `<span class="help">${esc(e.message)}</span>`;
+    return;
+  }
+  if (!box.isConnected) return;
+  const name = `<span class="mono">${esc(info.name)}</span>`;
+  if (info.prefixed) box.innerHTML = name;
+  else if (!info.own) box.innerHTML = `${name}<span class="help">not your playlist, so DJ Manager cannot rename it</span>`;
+  else {
+    box.innerHTML = `${name}<button class="btn" id="link-prefix" title="Rename on Spotify to: ${esc(info.new_name)}">ADD PREFIX</button>`;
+    $("#link-prefix", box).addEventListener("click", async (ev) => {
+      ev.target.disabled = true;
+      const res = await act(() => api("POST", `${url}/add-prefix`));
+      if (res) { toast(`Renamed on Spotify to ${res.name}`); loadSpotifyName(key, box, res); } else ev.target.disabled = false;
+    });
+  }
 }
 
 function removeSelected(key) {

@@ -615,12 +615,36 @@ class Service:
                 # until the new Spotify playlist contains them.
                 if url != pl.spotify_url:
                     pl.members = {tid: SOURCE_LOCAL for tid in pl.members}
+                    pl.spotify_owner = ""  # belongs to the old link
                 pl.spotify_url = url
                 lib.save()
             result = self.sync_playlist(job, pl) if url else f"{key}: link removed"
             self.write_traktor(job, f"link change of {key}")
             return result
         return self.jobs.submit(f"Change link of {key}", run)
+
+    def spotify_playlist_info(self, key: str) -> dict:
+        """Name of a genre's linked Spotify playlist and whether DJ Manager can add the prefix."""
+        pl = self._playlist(key)
+        pid = playlist_id(pl.spotify_url)
+        if not pid:
+            raise ServiceError(f"{key} is not linked to a Spotify playlist")
+        self.spotify.require()
+        info = self.spotify.playlist_info(pid)
+        prefix = self.settings.spotify_playlist_prefix
+        own = info["owner"] == self.spotify.account.user_id
+        prefixed = not prefix.strip() or info["name"].startswith(prefix.rstrip())
+        return {**info, "own": own, "prefixed": prefixed,
+                "new_name": info["name"] if prefixed else prefix + info["name"]}
+
+    def rename_spotify_playlist(self, key: str) -> dict:
+        """Put the DJM prefix in front of the name of a linked playlist the user owns."""
+        info = self.spotify_playlist_info(key)
+        if not info["own"]:
+            raise ServiceError("Only playlists of your own Spotify account can be renamed")
+        if not info["prefixed"]:
+            self.spotify.rename_playlist(playlist_id(self._playlist(key).spotify_url), info["new_name"])
+        return {**info, "name": info["new_name"], "prefixed": True}
 
     def submit_remove_tracks(self, key: str, track_ids: list[str]) -> Job:
         pl = self._playlist(key)
